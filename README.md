@@ -13,19 +13,19 @@ curl mlbsched.run
 curl mlbsched.run
 
 # Team's game today
-curl mlbsched.run/NYY
+curl mlbsched.run/NYM
 
 # Full schedule on a specific date
 curl mlbsched.run/2026-04-20
 
 # Team on a specific date
-curl mlbsched.run/NYY/2026-04-20
+curl mlbsched.run/NYM/2026-04-20
 
 # Tomorrow's schedule
 curl mlbsched.run/tomorrow
 
 # Tomorrow for a specific team
-curl mlbsched.run/tomorrow/NYY
+curl mlbsched.run/tomorrow/NYM
 
 # Division standings
 curl mlbsched.run/standings
