@@ -25,15 +25,16 @@ def text(content: str):
     return PlainTextResponse(content)
 
 
-def html_wrap(content: str) -> str:
-    # Strip ANSI codes for browser display, wrap in a styled pre block
+def html_wrap(content: str, refresh_secs: int | None = None) -> str:
     import re
     clean = re.sub(r"\033\[[0-9;]*m", "", content)
+    refresh_tag = f'<meta http-equiv="refresh" content="{refresh_secs}">' if refresh_secs else ""
     return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>mlbsched.run</title>
+  {refresh_tag}
   <style>
     body {{ background: #0d1117; margin: 0; padding: 2rem; }}
     pre  {{ color: #e6edf3; font-family: 'Fira Mono', 'Courier New', monospace;
@@ -45,10 +46,10 @@ def html_wrap(content: str) -> str:
 </html>"""
 
 
-def respond(request: Request, content: str):
+def respond(request: Request, content: str, refresh_secs: int | None = None):
     if is_curl(request):
         return text(content)
-    return HTMLResponse(html_wrap(content))
+    return HTMLResponse(html_wrap(content, refresh_secs))
 
 
 # ── JSON API ─────────────────────────────────────────────────────────────────
@@ -113,6 +114,22 @@ def root(request: Request):
 def tomorrow(request: Request):
     d = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
     return respond(request, sched.render_schedule(d))
+
+
+@app.get("/live")
+def live(request: Request):
+    return respond(request, sched.render_live(), refresh_secs=30)
+
+
+@app.get("/api/live")
+def api_live():
+    data = sched.fetch_schedule(date.today().strftime("%Y-%m-%d"))
+    games = []
+    for date_block in data.get("dates", []):
+        for game in date_block.get("games", []):
+            if game["status"]["abstractGameState"] == "Live":
+                games.append(build_game_json(game))
+    return JSONResponse({"date": date.today().isoformat(), "games": games})
 
 
 @app.get("/standings")

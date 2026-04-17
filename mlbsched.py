@@ -275,6 +275,37 @@ def render_team_list(out=None) -> str:
     return buf.getvalue()
 
 
+def render_live(out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    today = date.today().strftime("%Y-%m-%d")
+    data = fetch_schedule(today)
+
+    live_games = [
+        game
+        for date_block in data.get("dates", [])
+        for game in date_block.get("games", [])
+        if game["status"]["abstractGameState"] == "Live"
+    ]
+
+    p()
+    p(f"  {BOLD}{GREEN}Live Scores{RESET} — {BOLD}{WHITE}{date.today().strftime('%A, %B %-d, %Y')}{RESET}")
+    p(f"  {GRAY}{'─' * 52}{RESET}")
+
+    if not live_games:
+        p(f"  {GRAY}No games in progress right now.{RESET}")
+    else:
+        for game in live_games:
+            _render_game_line(game, _out)
+
+    p()
+    return buf.getvalue()
+
+
 def render_help(out=None) -> str:
     buf = io.StringIO()
     _out = out or buf
@@ -289,6 +320,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/<DATE>               Full schedule on a date  (YYYY-MM-DD)
     curl mlbsched.run/tomorrow             Tomorrow's schedule
     curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
+    curl mlbsched.run/live                 All games in progress right now
     curl mlbsched.run/standings            Division standings
     curl mlbsched.run/teams                All team abbreviations
 
