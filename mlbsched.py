@@ -2,7 +2,7 @@
 """mlbsched - MLB schedule in your terminal"""
 
 import sys
-import argparse
+import io
 from datetime import date, datetime, timedelta
 import requests
 
@@ -119,7 +119,6 @@ def parse_date(s: str) -> date:
             return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
-    # bare MM/DD — attach current year explicitly
     try:
         month, day = s.split("/")
         return date(date.today().year, int(month), int(day))
@@ -128,20 +127,24 @@ def parse_date(s: str) -> date:
     raise ValueError(f"Unrecognized date format: {s}")
 
 
-# ── Views ─────────────────────────────────────────────────────────────────────
-def render_schedule(date_str: str, team_abv: str | None = None):
+# ── Renderers (write to a buffer so server can capture output) ────────────────
+def render_schedule(date_str: str, team_abv: str | None = None, out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
     team_id = None
     if team_abv:
         abv = team_abv.upper()
         if abv not in TEAMS:
-            print(f"{RED}Unknown team abbreviation: {abv}{RESET}")
-            print_team_list()
-            return
+            p(f"{RED}Unknown team: {abv}{RESET}  —  try: curl mlbsched.run/teams")
+            return buf.getvalue()
         team_id = TEAMS[abv][0]
 
     data = fetch_schedule(date_str, team_id)
 
-    # header
     d = datetime.strptime(date_str, "%Y-%m-%d")
     label = d.strftime("%A, %B %-d, %Y")
     if team_abv:
@@ -151,61 +154,57 @@ def render_schedule(date_str: str, team_abv: str | None = None):
     else:
         title = f"{BOLD}{CYAN}MLB Schedule{RESET} — {BOLD}{WHITE}{label}{RESET}"
 
-    print()
-    print(f"  {title}")
-    print(f"  {GRAY}{'─' * 52}{RESET}")
+    p()
+    p(f"  {title}")
+    p(f"  {GRAY}{'─' * 52}{RESET}")
 
     total_games = sum(d.get("totalGames", 0) for d in data.get("dates", []))
     if total_games == 0:
-        print(f"  {GRAY}No games scheduled.{RESET}")
-        print()
-        return
+        p(f"  {GRAY}No games scheduled.{RESET}")
+        p()
+        return buf.getvalue()
 
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
-            _render_game_line(game)
+            _render_game_line(game, _out)
 
-    print()
+    p()
+    return buf.getvalue()
 
 
-def _render_game_line(game: dict):
-    away_id  = game["teams"]["away"]["team"]["id"]
-    home_id  = game["teams"]["home"]["team"]["id"]
-    away_abv = abv_from_id(away_id)
-    home_abv = abv_from_id(home_id)
+def _render_game_line(game: dict, out=None):
+    away_id   = game["teams"]["away"]["team"]["id"]
+    home_id   = game["teams"]["home"]["team"]["id"]
+    away_abv  = abv_from_id(away_id)
+    home_abv  = abv_from_id(home_id)
 
-    status     = game["status"]["detailedState"]
-    abstract   = game["status"]["abstractGameState"]  # Preview / Live / Final
-    status_col = game_status_color(status)
+    status    = game["status"]["detailedState"]
+    abstract  = game["status"]["abstractGameState"]
 
     away_score = game["teams"]["away"].get("score")
     home_score = game["teams"]["home"].get("score")
 
-    # inning info
-    linescore  = game.get("linescore", {})
-    inning     = linescore.get("currentInning")
+    linescore   = game.get("linescore", {})
+    inning      = linescore.get("currentInning")
     inning_half = linescore.get("inningHalf", "")
 
-    # game time
     game_time = ""
     if abstract == "Preview":
         gt = game.get("gameDate", "")
         if gt:
             try:
                 dt = datetime.strptime(gt, "%Y-%m-%dT%H:%M:%SZ")
-                # Convert UTC → ET (rough: -4 or -5; use fixed -4 for simplicity/EDT)
                 dt_et = dt.replace(hour=(dt.hour - 4) % 24)
                 game_time = dt_et.strftime("%-I:%M %p ET")
             except Exception:
-                game_time = ""
+                pass
 
-    # build line
-    away_str  = fmt_team(away_abv)
-    home_str  = fmt_team(home_abv)
+    away_str = fmt_team(away_abv)
+    home_str = fmt_team(home_abv)
 
     if abstract == "Final":
-        a_sc = f"{BOLD}{fmt_score(away_score)}{RESET}"
-        h_sc = f"{BOLD}{fmt_score(home_score)}{RESET}"
+        a_sc  = f"{BOLD}{fmt_score(away_score)}{RESET}"
+        h_sc  = f"{BOLD}{fmt_score(home_score)}{RESET}"
         state = f"{GRAY}Final{RESET}"
         if away_score is not None and home_score is not None:
             if away_score > home_score:
@@ -222,123 +221,130 @@ def _render_game_line(game: dict):
         h_sc  = f"{GRAY}  -{RESET}"
         state = f"{CYAN}{game_time}{RESET}" if game_time else f"{GRAY}{status}{RESET}"
 
-    print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}")
+    print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}", file=out)
 
 
-def render_today(team_abv: str | None = None):
-    render_schedule(date.today().strftime("%Y-%m-%d"), team_abv)
+def render_standings(out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
 
+    def p(s=""):
+        print(s, file=_out)
 
-def render_tomorrow(team_abv: str | None = None):
-    render_schedule((date.today() + timedelta(days=1)).strftime("%Y-%m-%d"), team_abv)
-
-
-def render_standings():
     data = fetch_standings()
 
-    print()
-    print(f"  {BOLD}{CYAN}MLB Standings{RESET}")
-    print(f"  {GRAY}{'─' * 52}{RESET}")
+    p()
+    p(f"  {BOLD}{CYAN}MLB Standings{RESET}")
+    p(f"  {GRAY}{'─' * 52}{RESET}")
 
     for record in data.get("records", []):
         div = record.get("division", {}).get("name", "Unknown Division")
-        print(f"\n  {BOLD}{YELLOW}{div}{RESET}")
-        print(f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5}{RESET}")
+        p(f"\n  {BOLD}{YELLOW}{div}{RESET}")
+        p(f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5}{RESET}")
 
         teams = sorted(record.get("teamRecords", []), key=lambda x: -float(x.get("winningPercentage", 0)))
         for i, t in enumerate(teams):
-            team_id  = t["team"]["id"]
-            abv      = abv_from_id(team_id)
-            name     = TEAMS.get(abv, (None, t["team"]["name"], WHITE))[1]
-            wins     = t.get("wins", 0)
-            losses   = t.get("losses", 0)
-            pct      = t.get("winningPercentage", ".000")
-            gb       = t.get("gamesBack", "-")
-            color    = team_color(abv)
-            marker   = f"{BOLD}{color}" if i == 0 else RESET
-            print(f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5}")
+            team_id = t["team"]["id"]
+            abv     = abv_from_id(team_id)
+            name    = TEAMS.get(abv, (None, t["team"]["name"], WHITE))[1]
+            wins    = t.get("wins", 0)
+            losses  = t.get("losses", 0)
+            pct     = t.get("winningPercentage", ".000")
+            gb      = t.get("gamesBack", "-")
+            color   = team_color(abv)
+            marker  = f"{BOLD}{color}" if i == 0 else RESET
+            p(f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5}")
 
-    print()
+    p()
+    return buf.getvalue()
 
 
-def print_team_list():
-    print(f"\n  {BOLD}Valid team abbreviations:{RESET}")
+def render_team_list(out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    p(f"\n  {BOLD}Valid team abbreviations:{RESET}")
     abvs = sorted(TEAMS.keys())
     for i in range(0, len(abvs), 6):
         row = "  ".join(f"{BOLD}{team_color(a)}{a}{RESET}" for a in abvs[i:i+6])
-        print(f"  {row}")
-    print()
+        p(f"  {row}")
+    p()
+    return buf.getvalue()
 
 
-def print_help():
+def render_help(out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
     print(f"""
-  {BOLD}{CYAN}mlbsched{RESET} — MLB schedule in your terminal
+  {BOLD}{CYAN}mlbsched.run{RESET} — MLB schedule in your terminal
 
   {BOLD}Usage:{RESET}
-    python mlbsched.py                     Today's full schedule
-    python mlbsched.py <TEAM>              Today's game for a team  (e.g. NYY)
-    python mlbsched.py <TEAM> <DATE>       Team schedule on a date
-    python mlbsched.py <DATE>              Full schedule on a date  (YYYY-MM-DD)
-    python mlbsched.py tomorrow            Tomorrow's schedule
-    python mlbsched.py standings           Division standings
-    python mlbsched.py teams               List all team abbreviations
+    curl mlbsched.run                      Today's full schedule
+    curl mlbsched.run/<TEAM>               Team's game today        (e.g. NYY)
+    curl mlbsched.run/<TEAM>/<DATE>        Team on a specific date
+    curl mlbsched.run/<DATE>               Full schedule on a date  (YYYY-MM-DD)
+    curl mlbsched.run/tomorrow             Tomorrow's schedule
+    curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
+    curl mlbsched.run/standings            Division standings
+    curl mlbsched.run/teams                All team abbreviations
 
   {BOLD}Examples:{RESET}
-    python mlbsched.py
-    python mlbsched.py NYY
-    python mlbsched.py NYY 2026-04-20
-    python mlbsched.py 2026-04-20
-    python mlbsched.py standings
-""")
+    curl mlbsched.run
+    curl mlbsched.run/NYY
+    curl mlbsched.run/NYY/2026-04-20
+    curl mlbsched.run/standings
+""", file=_out)
+    return buf.getvalue()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── CLI entry point ───────────────────────────────────────────────────────────
 def main():
     args = sys.argv[1:]
 
     if not args:
-        render_today()
+        render_schedule(date.today().strftime("%Y-%m-%d"), out=sys.stdout)
         return
 
     first = args[0].lower()
 
     if first in ("-h", "--help", "help"):
-        print_help()
+        render_help(out=sys.stdout)
         return
 
     if first == "teams":
-        print_team_list()
+        render_team_list(out=sys.stdout)
         return
 
     if first == "standings":
-        render_standings()
+        render_standings(out=sys.stdout)
         return
 
     if first == "tomorrow":
         team = args[1].upper() if len(args) > 1 else None
-        render_tomorrow(team)
+        d = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        render_schedule(d, team, out=sys.stdout)
         return
 
-    # try to parse first arg as a date
     try:
         d = parse_date(args[0])
-        render_schedule(d.strftime("%Y-%m-%d"))
+        render_schedule(d.strftime("%Y-%m-%d"), out=sys.stdout)
         return
     except ValueError:
         pass
 
-    # treat first arg as a team abbreviation
     team_abv = args[0].upper()
     if len(args) > 1:
         try:
             d = parse_date(args[1])
-            render_schedule(d.strftime("%Y-%m-%d"), team_abv)
-            return
+            render_schedule(d.strftime("%Y-%m-%d"), team_abv, out=sys.stdout)
         except ValueError:
             print(f"{RED}Could not parse date: {args[1]}{RESET}")
-            return
     else:
-        render_today(team_abv)
+        render_schedule(date.today().strftime("%Y-%m-%d"), team_abv, out=sys.stdout)
 
 
 if __name__ == "__main__":
