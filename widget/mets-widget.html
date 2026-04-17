@@ -1,0 +1,357 @@
+<!-- Mets Live Score Widget for brianpisano.com -->
+<!-- Paste this into Squarespace: Pages > Your Page > Edit > + > Code Block -->
+
+<div id="mets-widget">
+  <div class="mets-card">
+    <div class="mets-header">
+      <span class="mets-logo">⚾</span>
+      <span class="mets-title">New York Mets</span>
+      <span class="mets-live-dot" id="live-dot"></span>
+    </div>
+    <div id="mets-body" class="mets-body">
+      <div class="mets-loading">Loading...</div>
+    </div>
+    <div class="mets-footer">
+      <a href="mailto:pisano.b@gmail.com?subject=Let's talk Mets" class="mets-cta">
+        ⚾ Talk Mets with me
+      </a>
+      <span class="mets-powered">via <a href="http://mlbsched.run" target="_blank">mlbsched.run</a></span>
+    </div>
+  </div>
+</div>
+
+<!-- Easter egg: Konami code → celebration -->
+<div id="mets-egg" style="display:none">
+  <div class="egg-content">LET'S GO METS! 🎉⚾🎉</div>
+</div>
+
+<style>
+  #mets-widget {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 2rem auto;
+    max-width: 420px;
+  }
+
+  .mets-card {
+    background: #002d72;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    color: #fff;
+    box-shadow: 0 4px 24px rgba(0,45,114,0.25);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .mets-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #ff5910, #002d72, #ff5910);
+  }
+
+  .mets-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .mets-logo { font-size: 1.4rem; }
+
+  .mets-live-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: transparent;
+    margin-left: auto;
+  }
+
+  .mets-live-dot.live {
+    background: #4ade80;
+    animation: pulse 1.5s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.3); }
+  }
+
+  .mets-body { min-height: 60px; }
+
+  .mets-loading {
+    color: rgba(255,255,255,0.5);
+    font-size: 0.9rem;
+  }
+
+  /* No game today */
+  .mets-nogame {
+    color: rgba(255,255,255,0.75);
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  /* Score display */
+  .mets-scoreboard {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .mets-team {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+  }
+
+  .mets-team-abv {
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+  }
+
+  .mets-team-name {
+    font-size: 0.7rem;
+    opacity: 0.6;
+    text-align: center;
+  }
+
+  .mets-score {
+    font-size: 2.8rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .mets-score.winner { color: #ff5910; }
+
+  .mets-divider {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0 0.5rem;
+  }
+
+  .mets-vs {
+    font-size: 0.75rem;
+    opacity: 0.5;
+    font-weight: 600;
+  }
+
+  .mets-status {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #ff5910;
+    text-align: center;
+  }
+
+  .mets-status.live-status { color: #4ade80; }
+
+  /* Preview (upcoming game) */
+  .mets-upcoming {
+    text-align: center;
+  }
+
+  .mets-matchup {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
+  .mets-gametime {
+    font-size: 1.4rem;
+    font-weight: 900;
+    color: #ff5910;
+  }
+
+  .mets-gametime-label {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    margin-top: 0.15rem;
+  }
+
+  /* Footer */
+  .mets-footer {
+    margin-top: 1.1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .mets-cta {
+    background: #ff5910;
+    color: #fff !important;
+    text-decoration: none !important;
+    padding: 0.4rem 0.85rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    transition: background 0.2s, transform 0.1s;
+    cursor: pointer;
+  }
+
+  .mets-cta:hover {
+    background: #e04d0e;
+    transform: scale(1.03);
+  }
+
+  .mets-powered {
+    font-size: 0.65rem;
+    opacity: 0.4;
+  }
+
+  .mets-powered a { color: inherit; }
+
+  /* Easter egg */
+  #mets-egg {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,45,114,0.92);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .egg-content {
+    font-size: clamp(2rem, 6vw, 4rem);
+    font-weight: 900;
+    color: #ff5910;
+    text-align: center;
+    animation: eggpop 0.4s ease-out;
+  }
+
+  @keyframes eggpop {
+    from { transform: scale(0.5); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+</style>
+
+<script>
+(function() {
+  const API = 'https://mlbsched.run/api/NYM';
+
+  function render(games) {
+    const body = document.getElementById('mets-body');
+    const dot  = document.getElementById('live-dot');
+
+    if (!games || games.length === 0) {
+      dot.className = 'mets-live-dot';
+      body.innerHTML = `
+        <div class="mets-nogame">
+          No game today — but there's always tomorrow.<br>
+          <small style="opacity:0.5">Check back soon or <a href="http://mlbsched.run/NYM" target="_blank" style="color:#ff5910">view the full schedule</a>.</small>
+        </div>`;
+      return;
+    }
+
+    const g = games[0];
+
+    if (g.status === 'Live') {
+      dot.className = 'mets-live-dot live';
+      const awayWin = g.away_score > g.home_score;
+      const homeWin = g.home_score > g.away_score;
+      const half = g.inning_half === 'Top' ? '▲' : '▼';
+      body.innerHTML = `
+        <div class="mets-scoreboard">
+          <div class="mets-team">
+            <div class="mets-team-abv">${g.away}</div>
+            <div class="mets-score ${awayWin ? 'winner' : ''}">${g.away_score ?? 0}</div>
+            <div class="mets-team-name">${g.away_name}</div>
+          </div>
+          <div class="mets-divider">
+            <div class="mets-vs">@</div>
+            <div class="mets-status live-status">${half}${g.inning}</div>
+          </div>
+          <div class="mets-team">
+            <div class="mets-team-abv">${g.home}</div>
+            <div class="mets-score ${homeWin ? 'winner' : ''}">${g.home_score ?? 0}</div>
+            <div class="mets-team-name">${g.home_name}</div>
+          </div>
+        </div>`;
+
+    } else if (g.status === 'Final') {
+      dot.className = 'mets-live-dot';
+      const awayWin = g.away_score > g.home_score;
+      const homeWin = g.home_score > g.away_score;
+      body.innerHTML = `
+        <div class="mets-scoreboard">
+          <div class="mets-team">
+            <div class="mets-team-abv">${g.away}</div>
+            <div class="mets-score ${awayWin ? 'winner' : ''}">${g.away_score}</div>
+            <div class="mets-team-name">${g.away_name}</div>
+          </div>
+          <div class="mets-divider">
+            <div class="mets-vs">@</div>
+            <div class="mets-status">Final</div>
+          </div>
+          <div class="mets-team">
+            <div class="mets-team-abv">${g.home}</div>
+            <div class="mets-score ${homeWin ? 'winner' : ''}">${g.home_score}</div>
+            <div class="mets-team-name">${g.home_name}</div>
+          </div>
+        </div>`;
+
+    } else {
+      dot.className = 'mets-live-dot';
+      body.innerHTML = `
+        <div class="mets-upcoming">
+          <div class="mets-matchup">${g.away} @ ${g.home}</div>
+          <div class="mets-gametime">${g.game_time || 'TBD'}</div>
+          <div class="mets-gametime-label">First pitch</div>
+        </div>`;
+    }
+  }
+
+  function load() {
+    fetch(API)
+      .then(r => r.json())
+      .then(d => render(d.games))
+      .catch(() => {
+        document.getElementById('mets-body').innerHTML =
+          '<div class="mets-loading">Could not load score.</div>';
+      });
+  }
+
+  load();
+  setInterval(load, 60000); // refresh every minute
+
+  // Easter egg: click the baseball emoji 5 times
+  let clicks = 0;
+  document.querySelector('.mets-logo').addEventListener('click', () => {
+    clicks++;
+    if (clicks >= 5) {
+      clicks = 0;
+      const egg = document.getElementById('mets-egg');
+      egg.style.display = 'flex';
+      setTimeout(() => egg.style.display = 'none', 3000);
+    }
+  });
+
+  document.getElementById('mets-egg').addEventListener('click', () => {
+    document.getElementById('mets-egg').style.display = 'none';
+  });
+
+  // Easter egg: Konami code
+  const konami = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+  let ki = 0;
+  document.addEventListener('keydown', e => {
+    if (e.key === konami[ki]) {
+      ki++;
+      if (ki === konami.length) {
+        ki = 0;
+        const egg = document.getElementById('mets-egg');
+        egg.style.display = 'flex';
+        setTimeout(() => egg.style.display = 'none', 3000);
+      }
+    } else {
+      ki = 0;
+    }
+  });
+})();
+</script>

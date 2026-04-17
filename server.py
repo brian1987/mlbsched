@@ -1,11 +1,19 @@
 """mlbsched web server — serves ANSI text to curl, HTML to browsers"""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import mlbsched as sched
 
 app = FastAPI(docs_url=None, redoc_url=None)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 def is_curl(request: Request) -> bool:
@@ -41,6 +49,56 @@ def respond(request: Request, content: str):
     if is_curl(request):
         return text(content)
     return HTMLResponse(html_wrap(content))
+
+
+# ── JSON API ─────────────────────────────────────────────────────────────────
+
+def build_game_json(game: dict) -> dict:
+    away_id   = game["teams"]["away"]["team"]["id"]
+    home_id   = game["teams"]["home"]["team"]["id"]
+    away_abv  = sched.abv_from_id(away_id)
+    home_abv  = sched.abv_from_id(home_id)
+    abstract  = game["status"]["abstractGameState"]
+    status    = game["status"]["detailedState"]
+    linescore = game.get("linescore", {})
+
+    game_time = None
+    gt = game.get("gameDate", "")
+    if gt:
+        try:
+            dt = datetime.strptime(gt, "%Y-%m-%dT%H:%M:%SZ")
+            dt_et = dt.replace(hour=(dt.hour - 4) % 24)
+            game_time = dt_et.strftime("%-I:%M %p ET")
+        except Exception:
+            pass
+
+    return {
+        "away": away_abv,
+        "away_name": sched.TEAMS.get(away_abv, (None, away_abv, None))[1],
+        "home": home_abv,
+        "home_name": sched.TEAMS.get(home_abv, (None, home_abv, None))[1],
+        "away_score": game["teams"]["away"].get("score"),
+        "home_score": game["teams"]["home"].get("score"),
+        "status": abstract,
+        "detail": status,
+        "inning": linescore.get("currentInning"),
+        "inning_half": linescore.get("inningHalf"),
+        "game_time": game_time,
+    }
+
+
+@app.get("/api/{team}")
+def api_team(team: str):
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
+    team_id = sched.TEAMS[abv][0]
+    data = sched.fetch_schedule(date.today().strftime("%Y-%m-%d"), team_id)
+    games = []
+    for date_block in data.get("dates", []):
+        for game in date_block.get("games", []):
+            games.append(build_game_json(game))
+    return JSONResponse({"team": abv, "date": date.today().isoformat(), "games": games})
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
