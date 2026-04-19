@@ -106,8 +106,8 @@ def api_team(team: str):
 
 @app.get("/")
 def root(request: Request):
-    out = sched.render_schedule(date.today().strftime("%Y-%m-%d"))
-    return respond(request, out)
+    out, has_live = sched.render_smart_today()
+    return respond(request, out, refresh_secs=30 if has_live else None)
 
 
 @app.get("/tomorrow")

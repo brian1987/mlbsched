@@ -306,6 +306,56 @@ def render_live(out=None) -> str:
     return buf.getvalue()
 
 
+def render_smart_today(out=None) -> tuple[str, bool]:
+    """Combined view for the root endpoint. Returns (content, has_live_games)."""
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    today = date.today()
+    date_str = today.strftime("%Y-%m-%d")
+    label = today.strftime("%A, %B %-d, %Y")
+
+    data = fetch_schedule(date_str)
+
+    all_games = [
+        game
+        for date_block in data.get("dates", [])
+        for game in date_block.get("games", [])
+    ]
+    live_games = [g for g in all_games if g["status"]["abstractGameState"] == "Live"]
+    has_live = bool(live_games)
+
+    if has_live:
+        p()
+        p(f"  {BOLD}{GREEN}● Live Now{RESET} — {BOLD}{WHITE}{label}{RESET}")
+        p(f"  {GRAY}{'─' * 52}{RESET}")
+        for game in live_games:
+            _render_game_line(game, _out)
+
+        p()
+        p(f"  {BOLD}{CYAN}Today's Schedule{RESET}")
+        p(f"  {GRAY}{'─' * 52}{RESET}")
+        for game in all_games:
+            _render_game_line(game, _out)
+        p()
+    else:
+        title = f"{BOLD}{CYAN}MLB Schedule{RESET} — {BOLD}{WHITE}{label}{RESET}"
+        p()
+        p(f"  {title}")
+        p(f"  {GRAY}{'─' * 52}{RESET}")
+        if not all_games:
+            p(f"  {GRAY}No games scheduled.{RESET}")
+        else:
+            for game in all_games:
+                _render_game_line(game, _out)
+        p()
+
+    return buf.getvalue(), has_live
+
+
 def render_help(out=None) -> str:
     buf = io.StringIO()
     _out = out or buf
