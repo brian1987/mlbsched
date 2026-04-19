@@ -4,7 +4,18 @@
 import sys
 import io
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
+
+ET = ZoneInfo("America/New_York")
+
+
+def today_et() -> date:
+    """Return today's date in ET, switching to next day only after 1am ET."""
+    now = datetime.now(ET)
+    if now.hour < 1:
+        return (now - timedelta(days=1)).date()
+    return now.date()
 
 # ── ANSI colors ──────────────────────────────────────────────────────────────
 RESET  = "\033[0m"
@@ -121,7 +132,7 @@ def parse_date(s: str) -> date:
             continue
     try:
         month, day = s.split("/")
-        return date(date.today().year, int(month), int(day))
+        return date(today_et().year, int(month), int(day))
     except (ValueError, TypeError):
         pass
     raise ValueError(f"Unrecognized date format: {s}")
@@ -282,8 +293,9 @@ def render_live(out=None) -> str:
     def p(s=""):
         print(s, file=_out)
 
-    today = date.today().strftime("%Y-%m-%d")
-    data = fetch_schedule(today)
+    today = today_et()
+    date_str = today.strftime("%Y-%m-%d")
+    data = fetch_schedule(date_str)
 
     live_games = [
         game
@@ -293,7 +305,7 @@ def render_live(out=None) -> str:
     ]
 
     p()
-    p(f"  {BOLD}{GREEN}Live Scores{RESET} — {BOLD}{WHITE}{date.today().strftime('%A, %B %-d, %Y')}{RESET}")
+    p(f"  {BOLD}{GREEN}Live Scores{RESET} — {BOLD}{WHITE}{today.strftime('%A, %B %-d, %Y')}{RESET}")
     p(f"  {GRAY}{'─' * 52}{RESET}")
 
     if not live_games:
@@ -314,7 +326,7 @@ def render_smart_today(out=None) -> tuple[str, bool]:
     def p(s=""):
         print(s, file=_out)
 
-    today = date.today()
+    today = today_et()
     date_str = today.strftime("%Y-%m-%d")
     label = today.strftime("%A, %B %-d, %Y")
 
@@ -388,7 +400,7 @@ def main():
     args = sys.argv[1:]
 
     if not args:
-        render_schedule(date.today().strftime("%Y-%m-%d"), out=sys.stdout)
+        render_schedule(today_et().strftime("%Y-%m-%d"), out=sys.stdout)
         return
 
     first = args[0].lower()
@@ -407,7 +419,7 @@ def main():
 
     if first == "tomorrow":
         team = args[1].upper() if len(args) > 1 else None
-        d = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
         render_schedule(d, team, out=sys.stdout)
         return
 
@@ -426,7 +438,7 @@ def main():
         except ValueError:
             print(f"{RED}Could not parse date: {args[1]}{RESET}")
     else:
-        render_schedule(date.today().strftime("%Y-%m-%d"), team_abv, out=sys.stdout)
+        render_schedule(today_et().strftime("%Y-%m-%d"), team_abv, out=sys.stdout)
 
 
 if __name__ == "__main__":

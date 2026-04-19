@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import mlbsched as sched
+from mlbsched import today_et
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -94,12 +95,12 @@ def api_team(team: str):
     if abv not in sched.TEAMS:
         return JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
     team_id = sched.TEAMS[abv][0]
-    data = sched.fetch_schedule(date.today().strftime("%Y-%m-%d"), team_id)
+    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"), team_id)
     games = []
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
             games.append(build_game_json(game))
-    return JSONResponse({"team": abv, "date": date.today().isoformat(), "games": games})
+    return JSONResponse({"team": abv, "date": today_et().isoformat(), "games": games})
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ def root(request: Request):
 
 @app.get("/tomorrow")
 def tomorrow(request: Request):
-    d = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
     return respond(request, sched.render_schedule(d))
 
 
@@ -123,13 +124,13 @@ def live(request: Request):
 
 @app.get("/api/live")
 def api_live():
-    data = sched.fetch_schedule(date.today().strftime("%Y-%m-%d"))
+    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
     games = []
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
             if game["status"]["abstractGameState"] == "Live":
                 games.append(build_game_json(game))
-    return JSONResponse({"date": date.today().isoformat(), "games": games})
+    return JSONResponse({"date": today_et().isoformat(), "games": games})
 
 
 @app.get("/standings")
@@ -154,13 +155,13 @@ def one_segment(request: Request, segment: str):
         d = sched.parse_date(segment)
         out = sched.render_schedule(d.strftime("%Y-%m-%d"))
     except ValueError:
-        out = sched.render_schedule(date.today().strftime("%Y-%m-%d"), segment.upper())
+        out = sched.render_schedule(today_et().strftime("%Y-%m-%d"), segment.upper())
     return respond(request, out)
 
 
 @app.get("/tomorrow/{team}")
 def tomorrow_team(request: Request, team: str):
-    d = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+    d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
     return respond(request, sched.render_schedule(d, team.upper()))
 
 
