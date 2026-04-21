@@ -3,6 +3,7 @@
 
 import sys
 import io
+import math
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import requests
@@ -66,6 +67,51 @@ TEAMS = {
 
 TEAM_ID_TO_ABV = {v[0]: k for k, v in TEAMS.items()}
 
+# Stadium name, latitude, longitude
+STADIUMS = {
+    "ARI": ("Chase Field",                  33.4453, -112.0667),
+    "ATL": ("Truist Park",                  33.8908,  -84.4679),
+    "BAL": ("Oriole Park at Camden Yards",  39.2839,  -76.6218),
+    "BOS": ("Fenway Park",                  42.3467,  -71.0972),
+    "CHC": ("Wrigley Field",                41.9484,  -87.6553),
+    "CWS": ("Guaranteed Rate Field",        41.8300,  -87.6339),
+    "CIN": ("Great American Ball Park",     39.0974,  -84.5069),
+    "CLE": ("Progressive Field",            41.4962,  -81.6852),
+    "COL": ("Coors Field",                  39.7559, -104.9942),
+    "DET": ("Comerica Park",                42.3390,  -83.0485),
+    "HOU": ("Minute Maid Park",             29.7572,  -95.3556),
+    "KC":  ("Kauffman Stadium",             39.0517,  -94.4803),
+    "LAA": ("Angel Stadium",                33.8003, -117.8827),
+    "LAD": ("Dodger Stadium",               34.0739, -118.2400),
+    "MIA": ("loanDepot Park",               25.7781,  -80.2197),
+    "MIL": ("American Family Field",        43.0280,  -87.9712),
+    "MIN": ("Target Field",                 44.9817,  -93.2783),
+    "NYM": ("Citi Field",                   40.7571,  -73.8458),
+    "NYY": ("Yankee Stadium",               40.8296,  -73.9262),
+    "OAK": ("Sutter Health Park",           38.5768, -121.5085),
+    "PHI": ("Citizens Bank Park",           39.9057,  -75.1665),
+    "PIT": ("PNC Park",                     40.4469,  -80.0057),
+    "SD":  ("Petco Park",                   32.7076, -117.1570),
+    "SF":  ("Oracle Park",                  37.7786, -122.3893),
+    "SEA": ("T-Mobile Park",                47.5914, -122.3325),
+    "STL": ("Busch Stadium",                38.6226,  -90.1928),
+    "TB":  ("Tropicana Field",              27.7683,  -82.6534),
+    "TEX": ("Globe Life Field",             32.7473,  -97.0820),
+    "TOR": ("Rogers Centre",                43.6414,  -79.3894),
+    "WSH": ("Nationals Park",               38.8730,  -77.0074),
+}
+
+# Known neutral/international venues: venue name (as returned by MLB API) → (display_name, lat, lon)
+SPECIAL_VENUES: dict[str, tuple[str, float, float]] = {
+    "London Stadium":                    ("London Stadium",                   51.5386,   -0.0163),
+    "Estadio Alfredo Harp Helú":         ("Estadio Alfredo Harp Helú",        19.4897,  -99.1539),
+    "Tokyo Dome":                        ("Tokyo Dome",                       35.7056,  139.7519),
+    "Estadio de Béisbol Monterrey":      ("Estadio de Béisbol Monterrey",     25.6866, -100.3161),
+    "Estadio LoanMart Field":            ("Estadio LoanMart Field",           34.1427, -117.8346),
+    "Rickwood Field":                    ("Rickwood Field",                   33.5200,  -86.8354),
+    "Hiram Bithorn Stadium":             ("Hiram Bithorn Stadium",            18.4284,  -66.0676),
+}
+
 MLB_API = "https://statsapi.mlb.com/api/v1"
 
 
@@ -74,7 +120,7 @@ def fetch_schedule(date_str: str, team_id: int | None = None) -> dict:
     params = {
         "sportId": 1,
         "date": date_str,
-        "hydrate": "linescore,team",
+        "hydrate": "linescore,team,venue",
     }
     if team_id:
         params["teamId"] = team_id
@@ -91,6 +137,33 @@ def fetch_standings() -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# ── Distance helpers ──────────────────────────────────────────────────────────
+def game_location(game: dict) -> tuple[str, float, float] | None:
+    """Return (venue_name, lat, lon) for a game, handling neutral/international sites."""
+    venue_name = game.get("venue", {}).get("name", "")
+
+    if venue_name in SPECIAL_VENUES:
+        return SPECIAL_VENUES[venue_name]
+
+    home_id  = game["teams"]["home"]["team"]["id"]
+    home_abv = abv_from_id(home_id)
+    stadium  = STADIUMS.get(home_abv)
+    if stadium:
+        return stadium  # (name, lat, lon)
+
+    return None
+
+
+def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in miles between two lat/lon points."""
+    R = 3958.8
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.asin(math.sqrt(a))
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -183,7 +256,7 @@ def render_schedule(date_str: str, team_abv: str | None = None, out=None) -> str
     return buf.getvalue()
 
 
-def _render_game_line(game: dict, out=None):
+def _render_game_line(game: dict, out=None, dist_label: str | None = None):
     away_id   = game["teams"]["away"]["team"]["id"]
     home_id   = game["teams"]["home"]["team"]["id"]
     away_abv  = abv_from_id(away_id)
@@ -232,7 +305,59 @@ def _render_game_line(game: dict, out=None):
         h_sc  = f"{GRAY}  -{RESET}"
         state = f"{CYAN}{game_time}{RESET}" if game_time else f"{GRAY}{status}{RESET}"
 
-    print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}", file=out)
+    suffix = f"   {dist_label}" if dist_label else ""
+    print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
+
+
+def render_distance(user_lat: float, user_lon: float, user_city: str, out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    today = today_et()
+    date_str = today.strftime("%Y-%m-%d")
+    data = fetch_schedule(date_str)
+
+    all_games = [
+        game
+        for date_block in data.get("dates", [])
+        for game in date_block.get("games", [])
+    ]
+
+    games_with_dist = []
+    for game in all_games:
+        loc = game_location(game)
+        if loc:
+            venue_name, slat, slon = loc
+            dist = haversine(user_lat, user_lon, slat, slon)
+        else:
+            venue_name = "Unknown Stadium"
+            dist = float("inf")
+        games_with_dist.append((dist, game, venue_name))
+
+    games_with_dist.sort(key=lambda x: x[0])
+
+    p()
+    p(f"  {BOLD}{CYAN}Nearest Games Today{RESET} — {BOLD}{WHITE}{today.strftime('%A, %B %-d, %Y')}{RESET}")
+    p(f"  {GRAY}Nearest to: {user_city}{RESET}")
+    p(f"  {GRAY}{'─' * 60}{RESET}")
+
+    for dist, game, stadium_name in games_with_dist:
+        home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+        if dist < 50:
+            dist_color = GREEN
+        elif dist < 300:
+            dist_color = YELLOW
+        else:
+            dist_color = GRAY
+        dist_str = f"{dist:,.0f} mi" if dist != float("inf") else "? mi"
+        dist_label = f"{dist_color}{dist_str}{RESET}  {GRAY}{stadium_name}{RESET}"
+        _render_game_line(game, _out, dist_label=dist_label)
+
+    p()
+    return buf.getvalue()
 
 
 def render_standings(out=None) -> str:
@@ -383,6 +508,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/tomorrow             Tomorrow's schedule
     curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
     curl mlbsched.run/live                 All games in progress right now
+    curl mlbsched.run/distance             Today's games sorted by distance from you
     curl mlbsched.run/standings            Division standings
     curl mlbsched.run/teams                All team abbreviations
 
