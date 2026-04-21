@@ -8,8 +8,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests as _requests
 import mlbsched as sched
 from mlbsched import today_et
+import db
 
 app = FastAPI(docs_url=None, redoc_url=None)
+
+@app.on_event("startup")
+def startup():
+    db.init_db()
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        ip = get_client_ip(request)
+        ua = request.headers.get("user-agent", "")
+        db.log_request(request.url.path, ip, ua)
+    except Exception:
+        pass
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -246,6 +262,96 @@ def teams(request: Request):
 @app.get("/help")
 def help_page(request: Request):
     return respond(request, sched.render_help())
+
+
+@app.get("/metrics")
+def metrics(request: Request, days: int = 30):
+    days = max(1, min(days, 365))
+
+    daily = db.query("""
+        SELECT date,
+               COUNT(*)                              AS total,
+               COUNT(DISTINCT ip_hash)               AS uniq,
+               SUM(client = 'curl')                  AS curl_ct,
+               SUM(client = 'browser')               AS browser_ct
+        FROM   requests
+        WHERE  date >= date('now', ?)
+        GROUP  BY date
+        ORDER  BY date DESC
+    """, (f"-{days} days",))
+
+    top_paths = db.query("""
+        SELECT path, COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
+        FROM   requests
+        WHERE  date >= date('now', ?)
+        GROUP  BY path
+        ORDER  BY total DESC
+        LIMIT  15
+    """, (f"-{days} days",))
+
+    total_row = db.query("""
+        SELECT COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
+        FROM   requests
+        WHERE  date >= date('now', ?)
+    """, (f"-{days} days",))[0]
+
+    if not is_curl(request):
+        rows_html = "\n".join(
+            f"  <tr><td>{r['date']}</td><td>{r['total']}</td>"
+            f"<td>{r['uniq']}</td><td>{r['curl_ct']}</td><td>{r['browser_ct']}</td></tr>"
+            for r in daily
+        )
+        paths_html = "\n".join(
+            f"  <tr><td>{r['path']}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
+            for r in top_paths
+        )
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>mlbsched metrics</title>
+  <style>
+    body  {{ background:#0d1117; color:#e6edf3; font-family:'Fira Mono','Courier New',monospace;
+             font-size:14px; padding:2rem; margin:0; }}
+    h2    {{ color:#58a6ff; margin-top:2rem; }}
+    table {{ border-collapse:collapse; width:100%; max-width:700px; }}
+    th    {{ color:#8b949e; text-align:left; padding:4px 12px 4px 0; border-bottom:1px solid #30363d; }}
+    td    {{ padding:4px 12px 4px 0; border-bottom:1px solid #21262d; }}
+    .sum  {{ color:#3fb950; font-weight:bold; }}
+  </style>
+</head>
+<body>
+  <h2>mlbsched.run — last {days} days</h2>
+  <p class="sum">Total requests: {total_row['total']} &nbsp;|&nbsp; Unique IPs: {total_row['uniq']}</p>
+  <h2>Daily breakdown</h2>
+  <table>
+    <tr><th>Date</th><th>Requests</th><th>Unique IPs</th><th>curl</th><th>Browser</th></tr>
+    {rows_html}
+  </table>
+  <h2>Top paths</h2>
+  <table>
+    <tr><th>Path</th><th>Requests</th><th>Unique IPs</th></tr>
+    {paths_html}
+  </table>
+  <p style="color:#8b949e;margin-top:2rem">?days=N to change range (max 365) &nbsp;|&nbsp; raw data: metrics.db (SQLite)</p>
+</body>
+</html>"""
+        return HTMLResponse(html)
+
+    lines = [f"mlbsched metrics — last {days} days", ""]
+    lines.append(f"Total requests : {total_row['total']}")
+    lines.append(f"Unique IPs     : {total_row['uniq']}")
+    lines.append("")
+    lines.append(f"{'Date':<12} {'Requests':>9} {'Unique':>7} {'curl':>6} {'Browser':>8}")
+    lines.append("-" * 46)
+    for r in daily:
+        lines.append(f"{r['date']:<12} {r['total']:>9} {r['uniq']:>7} {r['curl_ct']:>6} {r['browser_ct']:>8}")
+    lines.append("")
+    lines.append(f"{'Path':<30} {'Requests':>9} {'Unique':>7}")
+    lines.append("-" * 48)
+    for r in top_paths:
+        lines.append(f"{r['path']:<30} {r['total']:>9} {r['uniq']:>7}")
+    return text("\n".join(lines) + "\n")
 
 
 @app.get("/{segment}")
