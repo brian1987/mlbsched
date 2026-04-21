@@ -1,9 +1,10 @@
 """mlbsched web server — serves ANSI text to curl, HTML to browsers"""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests as _requests
 import mlbsched as sched
 from mlbsched import today_et
@@ -64,7 +65,7 @@ def get_client_ip(request: Request) -> str:
 
 
 def geolocate_ip(ip: str) -> dict | None:
-    """Returns {lat, lon, city, country} or None on failure/private IP."""
+    """Returns {lat, lon, city, region, country, timezone} or None on failure/private IP."""
     try:
         resp = _requests.get(f"http://ip-api.com/json/{ip}", timeout=3)
         data = resp.json()
@@ -75,15 +76,29 @@ def geolocate_ip(ip: str) -> dict | None:
                 "city": data.get("city", ""),
                 "region": data.get("regionName", ""),
                 "country": data.get("country", ""),
+                "timezone": data.get("timezone", ""),
             }
     except Exception:
         pass
     return None
 
 
+def get_user_tz(geo: dict | None) -> ZoneInfo | None:
+    """Convert ip-api timezone string to ZoneInfo, falling back to None (→ ET)."""
+    if not geo:
+        return None
+    tz_name = geo.get("timezone", "")
+    if not tz_name:
+        return None
+    try:
+        return ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError):
+        return None
+
+
 # ── JSON API ─────────────────────────────────────────────────────────────────
 
-def build_game_json(game: dict, user_lat: float | None = None, user_lon: float | None = None) -> dict:
+def build_game_json(game: dict, user_lat: float | None = None, user_lon: float | None = None, tz: ZoneInfo | None = None) -> dict:
     away_id   = game["teams"]["away"]["team"]["id"]
     home_id   = game["teams"]["home"]["team"]["id"]
     away_abv  = sched.abv_from_id(away_id)
@@ -92,15 +107,7 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
     status    = game["status"]["detailedState"]
     linescore = game.get("linescore", {})
 
-    game_time = None
-    gt = game.get("gameDate", "")
-    if gt:
-        try:
-            dt = datetime.strptime(gt, "%Y-%m-%dT%H:%M:%SZ")
-            dt_et = dt.replace(hour=(dt.hour - 4) % 24)
-            game_time = dt_et.strftime("%-I:%M %p ET")
-        except Exception:
-            pass
+    game_time = sched.fmt_game_time(game.get("gameDate", ""), tz) or None
 
     loc = sched.game_location(game)
     stadium_name = loc[0] if loc else None
@@ -137,16 +144,18 @@ def api_live(request: Request):
     geo = geolocate_ip(get_client_ip(request))
     user_lat = geo["lat"] if geo else None
     user_lon = geo["lon"] if geo else None
+    tz = get_user_tz(geo)
     games = []
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
             if game["status"]["abstractGameState"] == "Live":
-                games.append(build_game_json(game, user_lat, user_lon))
+                games.append(build_game_json(game, user_lat, user_lon, tz))
     return JSONResponse({"date": today_et().isoformat(), "games": games})
 
 
 @app.get("/api/distance")
 def api_distance(request: Request, lat: float | None = None, lon: float | None = None):
+    geo = None
     if lat is None or lon is None:
         ip = get_client_ip(request)
         geo = geolocate_ip(ip)
@@ -158,10 +167,11 @@ def api_distance(request: Request, lat: float | None = None, lon: float | None =
         city = None
 
     data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
+    tz = get_user_tz(geo)
     games = []
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
-            g = build_game_json(game, lat, lon)
+            g = build_game_json(game, lat, lon, tz)
             games.append(g)
 
     games.sort(key=lambda g: g["distance_miles"] if g["distance_miles"] is not None else float("inf"))
@@ -178,10 +188,11 @@ def api_team(request: Request, team: str):
     geo = geolocate_ip(get_client_ip(request))
     user_lat = geo["lat"] if geo else None
     user_lon = geo["lon"] if geo else None
+    tz = get_user_tz(geo)
     games = []
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
-            games.append(build_game_json(game, user_lat, user_lon))
+            games.append(build_game_json(game, user_lat, user_lon, tz))
     return JSONResponse({"team": abv, "date": today_et().isoformat(), "games": games})
 
 
@@ -189,19 +200,22 @@ def api_team(request: Request, team: str):
 
 @app.get("/")
 def root(request: Request):
-    out, has_live = sched.render_smart_today()
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    out, has_live = sched.render_smart_today(tz=tz)
     return respond(request, out, refresh_secs=30 if has_live else None)
 
 
 @app.get("/tomorrow")
 def tomorrow(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_schedule(d))
+    return respond(request, sched.render_schedule(d, tz=tz))
 
 
 @app.get("/live")
 def live(request: Request):
-    return respond(request, sched.render_live(), refresh_secs=30)
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, sched.render_live(tz=tz), refresh_secs=30)
 
 
 @app.get("/distance")
@@ -215,7 +229,8 @@ def distance(request: Request):
         )
         return respond(request, msg)
     city = f"{geo['city']}, {geo['region']}" if geo.get("region") else geo["city"]
-    return respond(request, sched.render_distance(geo["lat"], geo["lon"], city), refresh_secs=60)
+    tz = get_user_tz(geo)
+    return respond(request, sched.render_distance(geo["lat"], geo["lon"], city, tz=tz), refresh_secs=60)
 
 
 @app.get("/standings")
@@ -235,26 +250,28 @@ def help_page(request: Request):
 
 @app.get("/{segment}")
 def one_segment(request: Request, segment: str):
-    # Could be a date (2026-04-20) or a team (NYY)
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     try:
         d = sched.parse_date(segment)
-        out = sched.render_schedule(d.strftime("%Y-%m-%d"))
+        out = sched.render_schedule(d.strftime("%Y-%m-%d"), tz=tz)
     except ValueError:
-        out = sched.render_schedule(today_et().strftime("%Y-%m-%d"), segment.upper())
+        out = sched.render_schedule(today_et().strftime("%Y-%m-%d"), segment.upper(), tz=tz)
     return respond(request, out)
 
 
 @app.get("/tomorrow/{team}")
 def tomorrow_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_schedule(d, team.upper()))
+    return respond(request, sched.render_schedule(d, team.upper(), tz=tz))
 
 
 @app.get("/{team}/{date_str}")
 def team_date(request: Request, team: str, date_str: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     try:
         d = sched.parse_date(date_str)
-        out = sched.render_schedule(d.strftime("%Y-%m-%d"), team.upper())
+        out = sched.render_schedule(d.strftime("%Y-%m-%d"), team.upper(), tz=tz)
     except ValueError:
         out = f"Invalid date: {date_str}\n"
     return respond(request, out)

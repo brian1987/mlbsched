@@ -4,7 +4,7 @@
 import sys
 import io
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as _UTC
 from zoneinfo import ZoneInfo
 import requests
 
@@ -211,8 +211,19 @@ def parse_date(s: str) -> date:
     raise ValueError(f"Unrecognized date format: {s}")
 
 
+def fmt_game_time(gt_str: str, tz: ZoneInfo | None = None) -> str:
+    if not gt_str:
+        return ""
+    try:
+        dt_utc = datetime.strptime(gt_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_UTC.utc)
+        dt_local = dt_utc.astimezone(tz or ET)
+        return dt_local.strftime("%-I:%M %p %Z")
+    except Exception:
+        return ""
+
+
 # ── Renderers (write to a buffer so server can capture output) ────────────────
-def render_schedule(date_str: str, team_abv: str | None = None, out=None) -> str:
+def render_schedule(date_str: str, team_abv: str | None = None, out=None, tz: ZoneInfo | None = None) -> str:
     buf = io.StringIO()
     _out = out or buf
 
@@ -250,13 +261,13 @@ def render_schedule(date_str: str, team_abv: str | None = None, out=None) -> str
 
     for date_block in data.get("dates", []):
         for game in date_block.get("games", []):
-            _render_game_line(game, _out)
+            _render_game_line(game, _out, tz=tz)
 
     p()
     return buf.getvalue()
 
 
-def _render_game_line(game: dict, out=None, dist_label: str | None = None):
+def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: ZoneInfo | None = None):
     away_id   = game["teams"]["away"]["team"]["id"]
     home_id   = game["teams"]["home"]["team"]["id"]
     away_abv  = abv_from_id(away_id)
@@ -274,14 +285,7 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None):
 
     game_time = ""
     if abstract == "Preview":
-        gt = game.get("gameDate", "")
-        if gt:
-            try:
-                dt = datetime.strptime(gt, "%Y-%m-%dT%H:%M:%SZ")
-                dt_et = dt.replace(hour=(dt.hour - 4) % 24)
-                game_time = dt_et.strftime("%-I:%M %p ET")
-            except Exception:
-                pass
+        game_time = fmt_game_time(game.get("gameDate", ""), tz)
 
     away_str = fmt_team(away_abv)
     home_str = fmt_team(home_abv)
@@ -309,7 +313,7 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None):
     print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
 
 
-def render_distance(user_lat: float, user_lon: float, user_city: str, out=None) -> str:
+def render_distance(user_lat: float, user_lon: float, user_city: str, out=None, tz: ZoneInfo | None = None) -> str:
     buf = io.StringIO()
     _out = out or buf
 
@@ -354,7 +358,7 @@ def render_distance(user_lat: float, user_lon: float, user_city: str, out=None) 
             dist_color = GRAY
         dist_str = f"{dist:,.0f} mi" if dist != float("inf") else "? mi"
         dist_label = f"{dist_color}{dist_str}{RESET}  {GRAY}{stadium_name}{RESET}"
-        _render_game_line(game, _out, dist_label=dist_label)
+        _render_game_line(game, _out, dist_label=dist_label, tz=tz)
 
     p()
     return buf.getvalue()
@@ -411,7 +415,7 @@ def render_team_list(out=None) -> str:
     return buf.getvalue()
 
 
-def render_live(out=None) -> str:
+def render_live(out=None, tz: ZoneInfo | None = None) -> str:
     buf = io.StringIO()
     _out = out or buf
 
@@ -437,13 +441,13 @@ def render_live(out=None) -> str:
         p(f"  {GRAY}No games in progress right now.{RESET}")
     else:
         for game in live_games:
-            _render_game_line(game, _out)
+            _render_game_line(game, _out, tz=tz)
 
     p()
     return buf.getvalue()
 
 
-def render_smart_today(out=None) -> tuple[str, bool]:
+def render_smart_today(out=None, tz: ZoneInfo | None = None) -> tuple[str, bool]:
     """Combined view for the root endpoint. Returns (content, has_live_games)."""
     buf = io.StringIO()
     _out = out or buf
@@ -470,13 +474,13 @@ def render_smart_today(out=None) -> tuple[str, bool]:
         p(f"  {BOLD}{GREEN}● Live Now{RESET} — {BOLD}{WHITE}{label}{RESET}")
         p(f"  {GRAY}{'─' * 52}{RESET}")
         for game in live_games:
-            _render_game_line(game, _out)
+            _render_game_line(game, _out, tz=tz)
 
         p()
         p(f"  {BOLD}{CYAN}Today's Schedule{RESET}")
         p(f"  {GRAY}{'─' * 52}{RESET}")
         for game in all_games:
-            _render_game_line(game, _out)
+            _render_game_line(game, _out, tz=tz)
         p()
     else:
         title = f"{BOLD}{CYAN}MLB Schedule{RESET} — {BOLD}{WHITE}{label}{RESET}"
@@ -487,7 +491,7 @@ def render_smart_today(out=None) -> tuple[str, bool]:
             p(f"  {GRAY}No games scheduled.{RESET}")
         else:
             for game in all_games:
-                _render_game_line(game, _out)
+                _render_game_line(game, _out, tz=tz)
         p()
 
     return buf.getvalue(), has_live
