@@ -474,6 +474,23 @@ def yesterday_team(request: Request, team: str):
     return respond(request, sched.render_team_recap(d, team.upper(), tz=tz))
 
 
+@app.get("/box/{team}")
+def box_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz))
+
+
+@app.get("/box/{team}/{date_str}")
+def box_team_date(request: Request, team: str, date_str: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    try:
+        d = sched.parse_date(date_str)
+    except ValueError:
+        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n")
+    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz))
+
+
 @app.get("/tomorrow/{team}")
 def tomorrow_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))

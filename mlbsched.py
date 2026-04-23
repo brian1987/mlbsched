@@ -677,6 +677,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/tomorrow             Tomorrow's schedule
     curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
     curl mlbsched.run/live                 All games in progress right now
+    curl mlbsched.run/box/<TEAM>           Yesterday's boxscore for a team
+    curl mlbsched.run/box/<TEAM>/<DATE>    Boxscore for a team on a specific date
     curl mlbsched.run/distance             Today's games sorted by distance from you
     curl mlbsched.run/odds                 Today's odds — best NY sportsbook price per market
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
