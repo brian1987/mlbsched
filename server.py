@@ -245,6 +245,30 @@ def api_odds_team(request: Request, team: str):
     })
 
 
+@app.get("/api/weather")
+def api_weather(request: Request):
+    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
+    games_out = []
+    for date_block in data.get("dates", []):
+        for game in date_block.get("games", []):
+            away_id = game["teams"]["away"]["team"]["id"]
+            home_id = game["teams"]["home"]["team"]["id"]
+            loc = weather.stadium_location(game)
+            stadium = loc[0] if loc else None
+            w = None
+            if loc and not weather.is_indoor(game):
+                _, lat, lon = loc
+                w = weather.get_weather(lat, lon)
+            games_out.append({
+                "away":     sched.abv_from_id(away_id),
+                "home":     sched.abv_from_id(home_id),
+                "stadium":  stadium,
+                "indoor":   weather.is_indoor(game),
+                "weather":  w,
+            })
+    return JSONResponse({"date": today_et().isoformat(), "games": games_out})
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
@@ -415,30 +439,6 @@ def metrics(request: Request, days: int = 30):
 @app.get("/weather")
 def weather_today(request: Request):
     return respond(request, weather.render_weather())
-
-
-@app.get("/api/weather")
-def api_weather(request: Request):
-    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
-    games_out = []
-    for date_block in data.get("dates", []):
-        for game in date_block.get("games", []):
-            away_id = game["teams"]["away"]["team"]["id"]
-            home_id = game["teams"]["home"]["team"]["id"]
-            loc = weather.stadium_location(game)
-            stadium = loc[0] if loc else None
-            w = None
-            if loc and not weather.is_indoor(game):
-                _, lat, lon = loc
-                w = weather.get_weather(lat, lon)
-            games_out.append({
-                "away":     sched.abv_from_id(away_id),
-                "home":     sched.abv_from_id(home_id),
-                "stadium":  stadium,
-                "indoor":   weather.is_indoor(game),
-                "weather":  w,
-            })
-    return JSONResponse({"date": today_et().isoformat(), "games": games_out})
 
 
 @app.get("/odds")
