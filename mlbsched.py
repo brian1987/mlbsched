@@ -120,13 +120,67 @@ def fetch_schedule(date_str: str, team_id: int | None = None) -> dict:
     params = {
         "sportId": 1,
         "date": date_str,
-        "hydrate": "linescore,team,venue",
+        "hydrate": "linescore,team,venue,probablePitcher",
     }
     if team_id:
         params["teamId"] = team_id
     resp = requests.get(f"{MLB_API}/schedule", params=params, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    _enrich_probable_pitchers(data)
+    return data
+
+
+def _enrich_probable_pitchers(schedule_data: dict) -> None:
+    """Splice season W-L and ERA into each probablePitcher dict (in place)."""
+    ids: list[int] = []
+    pitchers: list[dict] = []
+    for date_block in schedule_data.get("dates", []):
+        for game in date_block.get("games", []):
+            for side in ("away", "home"):
+                pp = game["teams"][side].get("probablePitcher")
+                if pp and pp.get("id"):
+                    ids.append(pp["id"])
+                    pitchers.append(pp)
+    if not ids:
+        return
+
+    season = today_et().year
+    try:
+        resp = requests.get(
+            f"{MLB_API}/people",
+            params={
+                "personIds": ",".join(str(i) for i in ids),
+                "hydrate":   f"stats(group=[pitching],type=[season],season={season})",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        people = resp.json().get("people", [])
+    except requests.RequestException:
+        return
+
+    stats_by_id: dict[int, dict] = {}
+    for p in people:
+        pid = p.get("id")
+        if not pid:
+            continue
+        for block in p.get("stats", []):
+            for split in block.get("splits", []):
+                s = split.get("stat", {})
+                stats_by_id[pid] = {
+                    "wins":   s.get("wins"),
+                    "losses": s.get("losses"),
+                    "era":    s.get("era"),
+                }
+                break
+            if pid in stats_by_id:
+                break
+
+    for pp in pitchers:
+        st = stats_by_id.get(pp["id"])
+        if st:
+            pp["_record"] = st
 
 
 def fetch_standings() -> dict:
@@ -311,6 +365,25 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
 
     suffix = f"   {dist_label}" if dist_label else ""
     print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
+
+    if abstract == "Preview":
+        away_pp = game["teams"]["away"].get("probablePitcher")
+        home_pp = game["teams"]["home"].get("probablePitcher")
+        if away_pp and home_pp:
+            a = _fmt_pitcher(away_pp)
+            h = _fmt_pitcher(home_pp)
+            print(f"         {GRAY}{a}  vs  {h}{RESET}", file=out)
+
+
+def _fmt_pitcher(pp: dict) -> str:
+    name = pp.get("fullName", "TBD")
+    rec  = pp.get("_record")
+    if not rec:
+        return name
+    w, l, era = rec.get("wins"), rec.get("losses"), rec.get("era")
+    if w is None or l is None or era is None:
+        return name
+    return f"{name} ({w}-{l}, {era})"
 
 
 def render_distance(user_lat: float, user_lon: float, user_city: str, out=None, tz: ZoneInfo | None = None) -> str:

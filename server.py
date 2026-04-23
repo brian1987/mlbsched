@@ -135,6 +135,18 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
     if user_lat is not None and user_lon is not None and stadium_lat is not None:
         distance_miles = round(sched.haversine(user_lat, user_lon, stadium_lat, stadium_lon), 1)
 
+    def pitcher_json(pp: dict | None) -> dict | None:
+        if not pp:
+            return None
+        rec = pp.get("_record") or {}
+        return {
+            "id":     pp.get("id"),
+            "name":   pp.get("fullName"),
+            "wins":   rec.get("wins"),
+            "losses": rec.get("losses"),
+            "era":    rec.get("era"),
+        }
+
     return {
         "away": away_abv,
         "away_name": sched.TEAMS.get(away_abv, (None, away_abv, None))[1],
@@ -151,6 +163,8 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
         "stadium_lat": stadium_lat,
         "stadium_lon": stadium_lon,
         "distance_miles": distance_miles,
+        "away_pitcher": pitcher_json(game["teams"]["away"].get("probablePitcher")),
+        "home_pitcher": pitcher_json(game["teams"]["home"].get("probablePitcher")),
     }
 
 
