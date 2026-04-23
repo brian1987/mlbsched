@@ -9,6 +9,7 @@ import requests as _requests
 import mlbsched as sched
 from mlbsched import today_et
 import db
+import odds
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -194,6 +195,41 @@ def api_distance(request: Request, lat: float | None = None, lon: float | None =
     return JSONResponse({"date": today_et().isoformat(), "user_lat": lat, "user_lon": lon, "user_city": city, "games": games})
 
 
+@app.get("/api/odds")
+def api_odds(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    events, meta = odds.get_odds_events()
+    events = odds._filter_events_today(events, tz)
+    return JSONResponse({
+        "date":   today_et().isoformat(),
+        "meta":   meta,
+        "games":  [odds.build_odds_json(e, tz) for e in events],
+    })
+
+
+@app.get("/api/odds/{team}")
+def api_odds_team(request: Request, team: str):
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    events, meta = odds.get_odds_events()
+    events = odds._filter_events_today(events, tz)
+    events = [
+        e for e in events
+        if abv in (
+            odds.FULL_NAME_TO_ABV.get(e.get("home_team", ""), ""),
+            odds.FULL_NAME_TO_ABV.get(e.get("away_team", ""), ""),
+        )
+    ]
+    return JSONResponse({
+        "team":  abv,
+        "date":  today_et().isoformat(),
+        "meta":  meta,
+        "games": [odds.build_odds_json(e, tz) for e in events],
+    })
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
@@ -359,6 +395,21 @@ def metrics(request: Request, days: int = 30):
     for r in top_paths:
         lines.append(f"{r['path']:<30} {r['total']:>9} {r['uniq']:>7}")
     return text("\n".join(lines) + "\n")
+
+
+@app.get("/odds")
+def odds_today(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, odds.render_odds(tz=tz))
+
+
+@app.get("/odds/{team}")
+def odds_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
+    return respond(request, odds.render_odds(team_abv=abv, tz=tz))
 
 
 @app.get("/{segment}")

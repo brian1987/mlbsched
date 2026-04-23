@@ -32,6 +32,35 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON requests (date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON requests (path)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS odds_cache (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            fetched_at         TEXT NOT NULL,
+            data               TEXT NOT NULL,
+            requests_remaining INTEGER
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_odds_fetched ON odds_cache (fetched_at)")
+    conn.commit()
+
+
+def read_latest_odds_cache() -> sqlite3.Row | None:
+    rows = _conn().execute(
+        "SELECT fetched_at, data, requests_remaining FROM odds_cache ORDER BY id DESC LIMIT 1"
+    ).fetchall()
+    return rows[0] if rows else None
+
+
+def write_odds_cache(data_json: str, requests_remaining: int | None):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO odds_cache (fetched_at, data, requests_remaining) VALUES (?, ?, ?)",
+        (now, data_json, requests_remaining),
+    )
+    conn.execute(
+        "DELETE FROM odds_cache WHERE id NOT IN (SELECT id FROM odds_cache ORDER BY id DESC LIMIT 48)"
+    )
     conn.commit()
 
 
