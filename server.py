@@ -221,6 +221,13 @@ def root(request: Request):
     return respond(request, out, refresh_secs=30 if has_live else None)
 
 
+@app.get("/yesterday")
+def yesterday(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return respond(request, sched.render_schedule(d, tz=tz))
+
+
 @app.get("/tomorrow")
 def tomorrow(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -363,6 +370,13 @@ def one_segment(request: Request, segment: str):
     except ValueError:
         out = sched.render_schedule(today_et().strftime("%Y-%m-%d"), segment.upper(), tz=tz)
     return respond(request, out)
+
+
+@app.get("/yesterday/{team}")
+def yesterday_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return respond(request, sched.render_schedule(d, team.upper(), tz=tz))
 
 
 @app.get("/tomorrow/{team}")

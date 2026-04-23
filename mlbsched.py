@@ -509,6 +509,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/<TEAM>               Team's game today        (e.g. NYY)
     curl mlbsched.run/<TEAM>/<DATE>        Team on a specific date
     curl mlbsched.run/<DATE>               Full schedule on a date  (YYYY-MM-DD)
+    curl mlbsched.run/yesterday            Yesterday's scores
+    curl mlbsched.run/yesterday/<TEAM>     Team yesterday
     curl mlbsched.run/tomorrow             Tomorrow's schedule
     curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
     curl mlbsched.run/live                 All games in progress right now
@@ -545,6 +547,12 @@ def main():
 
     if first == "standings":
         render_standings(out=sys.stdout)
+        return
+
+    if first == "yesterday":
+        team = args[1].upper() if len(args) > 1 else None
+        d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+        render_schedule(d, team, out=sys.stdout)
         return
 
     if first == "tomorrow":
