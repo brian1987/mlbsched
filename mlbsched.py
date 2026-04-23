@@ -386,6 +386,96 @@ def _fmt_pitcher(pp: dict) -> str:
     return f"{name} ({w}-{l}, {era})"
 
 
+def render_boxscore(game: dict, out=None) -> str:
+    """Render inning-by-inning line score for a Final game. Returns empty string otherwise."""
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    if game["status"]["abstractGameState"] != "Final":
+        return buf.getvalue()
+
+    ls = game.get("linescore", {})
+    innings = ls.get("innings", [])
+    if not innings:
+        return buf.getvalue()
+
+    away_abv = abv_from_id(game["teams"]["away"]["team"]["id"])
+    home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+
+    teams_totals = ls.get("teams", {})
+    away_totals  = teams_totals.get("away", {})
+    home_totals  = teams_totals.get("home", {})
+    away_runs    = away_totals.get("runs", 0)
+    home_runs    = home_totals.get("runs", 0)
+
+    def fmt_inning(side: dict | None) -> str:
+        if not side or side.get("runs") is None:
+            return f"{'-':>2}"
+        return f"{side['runs']:>2}"
+
+    header_nums = " ".join(f"{i.get('num', '?'):>2}" for i in innings)
+    p(f"      {GRAY}     {header_nums}   R  H  E{RESET}")
+
+    def row(abv: str, side_key: str, totals: dict, is_winner: bool):
+        inning_runs = " ".join(fmt_inning(i.get(side_key)) for i in innings)
+        r = totals.get("runs", 0)
+        h = totals.get("hits", 0)
+        e = totals.get("errors", 0)
+        color = f"{BOLD}{WHITE}" if is_winner else GRAY
+        return (
+            f"      {fmt_team(abv)}  {GRAY}{inning_runs}{RESET}   "
+            f"{color}{r:>2}{RESET} {GRAY}{h:>2} {e:>2}{RESET}"
+        )
+
+    p(row(away_abv, "away", away_totals, away_runs > home_runs))
+    p(row(home_abv, "home", home_totals, home_runs > away_runs))
+
+    return buf.getvalue()
+
+
+def render_team_recap(date_str: str, team_abv: str, out=None, tz: ZoneInfo | None = None) -> str:
+    """Score line + boxscore for each of a team's games on a given date. Reusable by /box/{team}/{date}."""
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    abv = team_abv.upper()
+    if abv not in TEAMS:
+        p(f"{RED}Unknown team: {abv}{RESET}  —  try: curl mlbsched.run/teams")
+        return buf.getvalue()
+
+    team_id = TEAMS[abv][0]
+    data    = fetch_schedule(date_str, team_id)
+
+    d     = datetime.strptime(date_str, "%Y-%m-%d")
+    label = d.strftime("%A, %B %-d, %Y")
+    color = team_color(abv)
+
+    p()
+    p(f"  {BOLD}{color}{TEAMS[abv][1]}{RESET} — {BOLD}{WHITE}{label}{RESET}")
+    p(f"  {GRAY}{'─' * 52}{RESET}")
+
+    games = [g for block in data.get("dates", []) for g in block.get("games", [])]
+    if not games:
+        p(f"  {GRAY}No games scheduled.{RESET}")
+        p()
+        return buf.getvalue()
+
+    for game in games:
+        _render_game_line(game, _out, tz=tz)
+        box = render_boxscore(game)
+        if box:
+            print(box, file=_out, end="")
+
+    p()
+    return buf.getvalue()
+
+
 def render_distance(user_lat: float, user_lon: float, user_city: str, out=None, tz: ZoneInfo | None = None) -> str:
     buf = io.StringIO()
     _out = out or buf

@@ -471,7 +471,7 @@ def one_segment(request: Request, segment: str):
 def yesterday_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_schedule(d, team.upper(), tz=tz))
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz))
 
 
 @app.get("/tomorrow/{team}")
