@@ -3,7 +3,7 @@
 import io
 import json
 import os
-from datetime import datetime, timezone as _UTC
+from datetime import datetime, time as _time, timezone as _UTC
 from zoneinfo import ZoneInfo
 
 import requests
@@ -127,6 +127,54 @@ def get_odds_events() -> tuple[list[dict], dict]:
         return [], {"source": "stale", "error": err}
 
 
+# ── Opening line (DraftKings reference) ──────────────────────────────────────
+
+REFERENCE_BOOK = "draftkings"
+
+
+def _today_et_midnight_utc_iso() -> str:
+    today = today_et()
+    dt_et = datetime.combine(today, _time(0, 0), tzinfo=ET)
+    return dt_et.astimezone(_UTC.utc).isoformat()
+
+
+def _dk_moneyline(event: dict) -> dict[str, int]:
+    """Extract DraftKings moneyline prices keyed by team full name."""
+    out: dict[str, int] = {}
+    for bm in event.get("bookmakers", []):
+        if bm.get("key") != REFERENCE_BOOK:
+            continue
+        for market in bm.get("markets", []):
+            if market.get("key") != "h2h":
+                continue
+            for o in market.get("outcomes", []):
+                price = o.get("price")
+                name  = o.get("name")
+                if price is not None and name:
+                    out[name] = price
+    return out
+
+
+def get_opening_moneylines() -> tuple[dict[str, dict[str, int]], str | None]:
+    """Return {event_id: {team_name: dk_price}} from today's earliest cache snapshot, plus its fetched_at."""
+    row = db.read_earliest_odds_cache_since(_today_et_midnight_utc_iso())
+    if not row:
+        return {}, None
+    try:
+        events = json.loads(row["data"])
+    except (ValueError, TypeError):
+        return {}, row["fetched_at"]
+    result: dict[str, dict[str, int]] = {}
+    for e in events:
+        eid = e.get("id")
+        if not eid:
+            continue
+        ml = _dk_moneyline(e)
+        if ml:
+            result[eid] = ml
+    return result, row["fetched_at"]
+
+
 # ── Best-price logic ──────────────────────────────────────────────────────────
 
 def _best_prices(event: dict) -> dict:
@@ -177,7 +225,7 @@ def _book_tag(book_key: str) -> str:
 
 # ── Renderers ─────────────────────────────────────────────────────────────────
 
-def _render_event(event: dict, out, tz: ZoneInfo | None = None):
+def _render_event(event: dict, out, tz: ZoneInfo | None = None, opening_ml: dict | None = None):
     def p(s=""):
         print(s, file=out)
 
@@ -236,6 +284,22 @@ def _render_event(event: dict, out, tz: ZoneInfo | None = None):
         else:
             u_str = f"{GRAY}U   —{RESET}"
         p(f"    {GRAY}TOT{RESET}  {o_str}   {u_str}")
+
+    # DK line movement since today's opening snapshot
+    if opening_ml:
+        dk_now = _dk_moneyline(event)
+        parts: list[str] = []
+        for abv, full in [(away_abv, away_full), (home_abv, home_full)]:
+            open_price = opening_ml.get(full)
+            now_price  = dk_now.get(full)
+            if open_price is not None and now_price is not None and open_price != now_price:
+                parts.append(
+                    f"{abv} {_fmt_american(open_price)}→{_fmt_american(now_price)}"
+                )
+            elif open_price is not None and now_price is not None:
+                parts.append(f"{abv} {_fmt_american(now_price)} (flat)")
+        if parts:
+            p(f"    {GRAY}MOV  {'   '.join(parts)}  (DK){RESET}")
 
     p()
 
@@ -319,8 +383,18 @@ def render_odds(team_abv: str | None = None, out=None, tz: ZoneInfo | None = Non
         _render_footer(_out)
         return buf.getvalue()
 
+    openings_by_id, opening_fetched_at = get_opening_moneylines()
+
     for event in events:
-        _render_event(event, _out, tz=tz)
+        event_openings = openings_by_id.get(event.get("id"))
+        _render_event(event, _out, tz=tz, opening_ml=event_openings)
+
+    if openings_by_id and opening_fetched_at:
+        try:
+            dt = datetime.fromisoformat(opening_fetched_at).astimezone(ET)
+            p(f"  {GRAY}Movement vs DK opening at {dt.strftime('%-I:%M %p %Z')}.{RESET}")
+        except Exception:
+            pass
 
     _render_meta_line(meta, _out)
     p()

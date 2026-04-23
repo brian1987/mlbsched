@@ -590,6 +590,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/distance             Today's games sorted by distance from you
     curl mlbsched.run/odds                 Today's odds — best NY sportsbook price per market
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
+    curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings
     curl mlbsched.run/teams                All team abbreviations
 
