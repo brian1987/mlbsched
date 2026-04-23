@@ -503,7 +503,7 @@ def team_date(request: Request, team: str, date_str: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     try:
         d = sched.parse_date(date_str)
-        out = sched.render_schedule(d.strftime("%Y-%m-%d"), team.upper(), tz=tz)
+        out = sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz)
     except ValueError:
         out = f"Invalid date: {date_str}\n"
     return respond(request, out)
