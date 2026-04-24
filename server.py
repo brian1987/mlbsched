@@ -10,6 +10,7 @@ import mlbsched as sched
 from mlbsched import today_et
 import db
 import odds
+import bestbets
 import weather
 
 app = FastAPI(docs_url=None, redoc_url=None)
@@ -245,6 +246,49 @@ def api_odds_team(request: Request, team: str):
     })
 
 
+@app.get("/api/bestbets")
+def api_bestbets(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    events, meta = odds.get_odds_events()
+    events = odds._filter_events_today(events, tz)
+    all_edges: list[dict] = []
+    for e in events:
+        all_edges.extend(bestbets.find_edges(e))
+    top = sorted(all_edges, key=lambda x: -x["ev"])[:bestbets.TOP_N]
+    return JSONResponse({
+        "date":  today_et().isoformat(),
+        "meta":  meta,
+        "edges": [bestbets.build_edge_json(e) for e in top],
+    })
+
+
+@app.get("/api/bestbets/{team}")
+def api_bestbets_team(request: Request, team: str):
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    events, meta = odds.get_odds_events()
+    events = odds._filter_events_today(events, tz)
+    events = [
+        e for e in events
+        if abv in (
+            odds.FULL_NAME_TO_ABV.get(e.get("home_team", ""), ""),
+            odds.FULL_NAME_TO_ABV.get(e.get("away_team", ""), ""),
+        )
+    ]
+    all_edges: list[dict] = []
+    for e in events:
+        all_edges.extend(bestbets.find_edges(e))
+    all_edges.sort(key=lambda x: -x["ev"])
+    return JSONResponse({
+        "team":  abv,
+        "date":  today_et().isoformat(),
+        "meta":  meta,
+        "edges": [bestbets.build_edge_json(e) for e in all_edges],
+    })
+
+
 @app.get("/api/weather")
 def api_weather(request: Request):
     data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
@@ -454,6 +498,21 @@ def odds_team(request: Request, team: str):
     if abv not in sched.TEAMS:
         return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
     return respond(request, odds.render_odds(team_abv=abv, tz=tz))
+
+
+@app.get("/bestbets")
+def bestbets_today(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, bestbets.render_bestbets(tz=tz))
+
+
+@app.get("/bestbets/{team}")
+def bestbets_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
+    return respond(request, bestbets.render_bestbets(team_abv=abv, tz=tz))
 
 
 @app.get("/{segment}")
