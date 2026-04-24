@@ -89,14 +89,6 @@ def write_odds_cache(data_json: str, requests_remaining: int | None):
     conn.commit()
 
 
-def read_earliest_odds_cache_since(iso_cutoff: str) -> sqlite3.Row | None:
-    rows = _conn().execute(
-        "SELECT fetched_at, data FROM odds_cache WHERE fetched_at >= ? ORDER BY id ASC LIMIT 1",
-        (iso_cutoff,),
-    ).fetchall()
-    return rows[0] if rows else None
-
-
 def log_request(path: str, ip: str, user_agent: str):
     now = datetime.now(timezone.utc)
     ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]
