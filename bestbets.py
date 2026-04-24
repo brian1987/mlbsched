@@ -1,7 +1,7 @@
 """Best-bets — flag pricing edges using no-vig multi-book consensus."""
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta, timezone as _UTC
 from zoneinfo import ZoneInfo
 
 import odds
@@ -12,10 +12,28 @@ from mlbsched import (
 
 MARKET_KEYS = ("h2h", "spreads", "totals")
 
-MIN_DISPLAY_EV = 0.01   # 1% — below this is noise
-STRONG_EDGE_EV = 0.03   # 3% — worth calling out
-SUSPICIOUS_EV  = 0.05   # 5% — often a stale line
-TOP_N          = 5
+MIN_DISPLAY_EV    = 0.01   # 1% — below this is noise
+STRONG_EDGE_EV    = 0.03   # 3% — worth calling out
+SUSPICIOUS_EV     = 0.05   # 5% — often a stale line
+TOP_N             = 5
+MIN_LEAD_MINUTES  = 15     # skip games starting sooner than this (steam already moved)
+
+
+def _filter_upcoming(events: list[dict]) -> list[dict]:
+    """Drop events already underway or starting within MIN_LEAD_MINUTES."""
+    cutoff = datetime.now(_UTC.utc) + timedelta(minutes=MIN_LEAD_MINUTES)
+    out: list[dict] = []
+    for e in events:
+        ct = e.get("commence_time", "")
+        if not ct:
+            continue
+        try:
+            dt_utc = datetime.strptime(ct, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_UTC.utc)
+        except ValueError:
+            continue
+        if dt_utc >= cutoff:
+            out.append(e)
+    return out
 
 
 # ── Math ──────────────────────────────────────────────────────────────────────
@@ -29,7 +47,7 @@ def american_to_prob(american: int) -> float:
 def prob_to_american(p: float) -> int:
     if p <= 0 or p >= 1:
         return 0
-    if p >= 0.5:
+    if p > 0.5:
         return -round(p / (1 - p) * 100)
     return round((1 - p) / p * 100)
 
@@ -189,6 +207,7 @@ def render_bestbets(team_abv: str | None = None, out=None, tz: ZoneInfo | None =
 
     events, meta = odds.get_odds_events()
     events = odds._filter_events_today(events, tz)
+    events = _filter_upcoming(events)
 
     if team_abv:
         abv = team_abv.upper()

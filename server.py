@@ -251,6 +251,7 @@ def api_bestbets(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     events, meta = odds.get_odds_events()
     events = odds._filter_events_today(events, tz)
+    events = bestbets._filter_upcoming(events)
     all_edges: list[dict] = []
     for e in events:
         all_edges.extend(bestbets.find_edges(e))
@@ -270,6 +271,7 @@ def api_bestbets_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     events, meta = odds.get_odds_events()
     events = odds._filter_events_today(events, tz)
+    events = bestbets._filter_upcoming(events)
     events = [
         e for e in events
         if abv in (
