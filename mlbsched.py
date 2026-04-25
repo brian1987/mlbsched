@@ -329,6 +329,7 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
 
     status    = game["status"]["detailedState"]
     abstract  = game["status"]["abstractGameState"]
+    reason    = game["status"].get("reason") or ""
 
     away_score = game["teams"]["away"].get("score")
     home_score = game["teams"]["home"].get("score")
@@ -337,14 +338,28 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
     inning      = linescore.get("currentInning")
     inning_half = linescore.get("inningHalf", "")
 
+    detail_lower = status.lower()
+    is_no_play = (
+        "postponed" in detail_lower
+        or "cancel" in detail_lower
+        or "suspended" in detail_lower
+    )
+
     game_time = ""
-    if abstract == "Preview":
+    if abstract == "Preview" and not is_no_play:
         game_time = fmt_game_time(game.get("gameDate", ""), tz)
 
     away_str = fmt_team(away_abv)
     home_str = fmt_team(home_abv)
 
-    if abstract == "Final":
+    if is_no_play:
+        a_sc = f"{GRAY}{fmt_score(away_score)}{RESET}"
+        h_sc = f"{GRAY}{fmt_score(home_score)}{RESET}"
+        label = status
+        if reason and reason.lower() not in detail_lower:
+            label = f"{status}: {reason}"
+        state = f"{BOLD}{YELLOW}{label}{RESET}"
+    elif abstract == "Final":
         a_sc  = f"{BOLD}{fmt_score(away_score)}{RESET}"
         h_sc  = f"{BOLD}{fmt_score(home_score)}{RESET}"
         state = f"{GRAY}Final{RESET}"
@@ -366,7 +381,7 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
     suffix = f"   {dist_label}" if dist_label else ""
     print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
 
-    if abstract == "Preview":
+    if abstract == "Preview" and not is_no_play:
         away_pp = game["teams"]["away"].get("probablePitcher")
         home_pp = game["teams"]["home"].get("probablePitcher")
         if away_pp and home_pp:

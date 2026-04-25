@@ -124,6 +124,7 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
     home_abv  = sched.abv_from_id(home_id)
     abstract  = game["status"]["abstractGameState"]
     status    = game["status"]["detailedState"]
+    reason    = game["status"].get("reason") or None
     linescore = game.get("linescore", {})
 
     game_time = sched.fmt_game_time(game.get("gameDate", ""), tz) or None
@@ -158,6 +159,7 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
         "home_score": game["teams"]["home"].get("score"),
         "status": abstract,
         "detail": status,
+        "reason": reason,
         "inning": linescore.get("currentInning"),
         "inning_half": linescore.get("inningHalf"),
         "game_time": game_time,
