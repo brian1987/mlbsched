@@ -12,6 +12,7 @@ import db
 import odds
 import bestbets
 import weather
+import streaks
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -293,6 +294,18 @@ def api_bestbets_team(request: Request, team: str):
     })
 
 
+@app.get("/api/streaks")
+def api_streaks(min: int = streaks.DEFAULT_MIN):
+    min = max(1, min)
+    winning, losing = streaks.get_streaks(min)
+    return JSONResponse({
+        "date":    today_et().isoformat(),
+        "min":     min,
+        "winning": [streaks.build_streak_json(s) for s in winning],
+        "losing":  [streaks.build_streak_json(s) for s in losing],
+    })
+
+
 @app.get("/api/weather")
 def api_weather(request: Request):
     data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
@@ -502,6 +515,12 @@ def odds_team(request: Request, team: str):
     if abv not in sched.TEAMS:
         return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
     return respond(request, odds.render_odds(team_abv=abv, tz=tz))
+
+
+@app.get("/streaks")
+def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
+    min = max(1, min)
+    return respond(request, streaks.render_streaks(min_streak=min))
 
 
 @app.get("/bestbets")

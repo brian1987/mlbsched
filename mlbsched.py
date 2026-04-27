@@ -699,6 +699,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
     curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings
+    curl mlbsched.run/streaks              Teams on hot or cold runs (4+ games, ?min=N)
     curl mlbsched.run/teams                All team abbreviations
 
   {BOLD}Examples:{RESET}
