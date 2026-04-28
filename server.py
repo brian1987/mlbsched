@@ -15,6 +15,7 @@ import weather
 import streaks
 import leaders
 import wildcard
+import h2h
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -308,6 +309,18 @@ def api_streaks(min: int = streaks.DEFAULT_MIN):
     })
 
 
+@app.get("/api/h2h/{team_a}/{team_b}")
+def api_h2h(team_a: str, team_b: str):
+    a = team_a.upper()
+    b = team_b.upper()
+    if a not in sched.TEAMS or b not in sched.TEAMS:
+        bad = a if a not in sched.TEAMS else b
+        return JSONResponse({"error": f"Unknown team: {bad}"}, status_code=404)
+    if a == b:
+        return JSONResponse({"error": "Pick two different teams."}, status_code=400)
+    return JSONResponse(h2h.build_h2h_json(a, b))
+
+
 @app.get("/api/wildcard")
 def api_wildcard():
     return JSONResponse({"date": today_et().isoformat(), **wildcard.get_wildcard_json()})
@@ -553,6 +566,12 @@ def odds_team(request: Request, team: str):
 def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
     min = max(1, min)
     return respond(request, streaks.render_streaks(min_streak=min))
+
+
+@app.get("/h2h/{team_a}/{team_b}")
+def h2h_route(request: Request, team_a: str, team_b: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, h2h.render_h2h(team_a, team_b, tz=tz))
 
 
 @app.get("/wildcard")

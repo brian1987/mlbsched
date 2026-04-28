@@ -716,6 +716,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings (W-L, PCT, GB, L10, run diff)
     curl mlbsched.run/wildcard             Wild Card race per league
+    curl mlbsched.run/h2h/<TEAM>/<TEAM>    Season head-to-head series
     curl mlbsched.run/streaks              Teams on hot or cold runs (4+ games, ?min=N)
     curl mlbsched.run/leaders              Top batting + pitching leaders (HR, AVG, OPS, W, ERA, K)
     curl mlbsched.run/leaders/<STAT>       Top 25 in one stat (e.g. ops, era, whip, hr, sb)
