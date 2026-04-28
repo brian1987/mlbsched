@@ -17,6 +17,7 @@ import leaders
 import wildcard
 import h2h
 import player
+import lineup
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -310,6 +311,14 @@ def api_streaks(min: int = streaks.DEFAULT_MIN):
     })
 
 
+@app.get("/api/lineup/{team}")
+def api_lineup(team: str):
+    data = lineup.build_lineup_json(team)
+    if "error" in data:
+        return JSONResponse(data, status_code=404)
+    return JSONResponse(data)
+
+
 @app.get("/api/player/{name}")
 def api_player(name: str):
     return JSONResponse(player.build_player_json(name))
@@ -572,6 +581,12 @@ def odds_team(request: Request, team: str):
 def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
     min = max(1, min)
     return respond(request, streaks.render_streaks(min_streak=min))
+
+
+@app.get("/lineup/{team}")
+def lineup_route(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, lineup.render_lineup(team, tz=tz))
 
 
 @app.get("/player/{name}")
