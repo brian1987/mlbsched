@@ -542,6 +542,20 @@ def render_distance(user_lat: float, user_lon: float, user_city: str, out=None, 
     return buf.getvalue()
 
 
+def _last_ten(t: dict) -> str:
+    for s in t.get("records", {}).get("splitRecords", []):
+        if s.get("type") == "lastTen":
+            return f"{s.get('wins', 0)}-{s.get('losses', 0)}"
+    return "-"
+
+
+def _run_diff(t: dict) -> str:
+    rd = t.get("runDifferential")
+    if rd is None:
+        return "-"
+    return f"+{rd}" if rd > 0 else str(rd)
+
+
 def render_standings(out=None) -> str:
     buf = io.StringIO()
     _out = out or buf
@@ -553,12 +567,12 @@ def render_standings(out=None) -> str:
 
     p()
     p(f"  {BOLD}{CYAN}MLB Standings{RESET}")
-    p(f"  {GRAY}{'─' * 52}{RESET}")
+    p(f"  {GRAY}{'─' * 60}{RESET}")
 
     for record in data.get("records", []):
         div = record.get("division", {}).get("name", "Unknown Division")
         p(f"\n  {BOLD}{YELLOW}{div}{RESET}")
-        p(f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5}{RESET}")
+        p(f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5} {'L10':>5} {'RDIF':>5}{RESET}")
 
         teams = sorted(record.get("teamRecords", []), key=lambda x: -float(x.get("winningPercentage", 0)))
         for i, t in enumerate(teams):
@@ -569,9 +583,11 @@ def render_standings(out=None) -> str:
             losses  = t.get("losses", 0)
             pct     = t.get("winningPercentage", ".000")
             gb      = t.get("gamesBack", "-")
+            l10     = _last_ten(t)
+            rdif    = _run_diff(t)
             color   = team_color(abv)
             marker  = f"{BOLD}{color}" if i == 0 else RESET
-            p(f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5}")
+            p(f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5} {l10:>5} {rdif:>5}")
 
     p()
     return buf.getvalue()
@@ -698,7 +714,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/odds                 Today's odds — best NY sportsbook price per market
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
     curl mlbsched.run/weather              Current weather at each stadium
-    curl mlbsched.run/standings            Division standings
+    curl mlbsched.run/standings            Division standings (W-L, PCT, GB, L10, run diff)
+    curl mlbsched.run/wildcard             Wild Card race per league
     curl mlbsched.run/streaks              Teams on hot or cold runs (4+ games, ?min=N)
     curl mlbsched.run/leaders              Top batting + pitching leaders (HR, AVG, OPS, W, ERA, K)
     curl mlbsched.run/leaders/<STAT>       Top 25 in one stat (e.g. ops, era, whip, hr, sb)

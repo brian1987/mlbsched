@@ -14,6 +14,7 @@ import bestbets
 import weather
 import streaks
 import leaders
+import wildcard
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -307,6 +308,11 @@ def api_streaks(min: int = streaks.DEFAULT_MIN):
     })
 
 
+@app.get("/api/wildcard")
+def api_wildcard():
+    return JSONResponse({"date": today_et().isoformat(), **wildcard.get_wildcard_json()})
+
+
 @app.get("/api/leaders")
 def api_leaders():
     out = []
@@ -547,6 +553,11 @@ def odds_team(request: Request, team: str):
 def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
     min = max(1, min)
     return respond(request, streaks.render_streaks(min_streak=min))
+
+
+@app.get("/wildcard")
+def wildcard_today(request: Request):
+    return respond(request, wildcard.render_wildcard())
 
 
 @app.get("/leaders")
