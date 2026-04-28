@@ -16,6 +16,7 @@ import streaks
 import leaders
 import wildcard
 import h2h
+import player
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -309,6 +310,11 @@ def api_streaks(min: int = streaks.DEFAULT_MIN):
     })
 
 
+@app.get("/api/player/{name}")
+def api_player(name: str):
+    return JSONResponse(player.build_player_json(name))
+
+
 @app.get("/api/h2h/{team_a}/{team_b}")
 def api_h2h(team_a: str, team_b: str):
     a = team_a.upper()
@@ -566,6 +572,11 @@ def odds_team(request: Request, team: str):
 def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
     min = max(1, min)
     return respond(request, streaks.render_streaks(min_streak=min))
+
+
+@app.get("/player/{name}")
+def player_route(request: Request, name: str):
+    return respond(request, player.render_player(name))
 
 
 @app.get("/h2h/{team_a}/{team_b}")
