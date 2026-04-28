@@ -13,6 +13,7 @@ import odds
 import bestbets
 import weather
 import streaks
+import leaders
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -306,6 +307,31 @@ def api_streaks(min: int = streaks.DEFAULT_MIN):
     })
 
 
+@app.get("/api/leaders")
+def api_leaders():
+    out = []
+    season = today_et().year
+    for group_name, tiles in leaders.DASHBOARD:
+        for alias, title, n in tiles:
+            data = leaders.get_leaders(alias, n)
+            if data:
+                data["title"] = title
+                out.append(data)
+    return JSONResponse({"season": season, "leaders": out})
+
+
+@app.get("/api/leaders/{stat}")
+def api_leaders_stat(stat: str, limit: int = 25):
+    limit = max(1, min(limit, 50))
+    data = leaders.get_leaders(stat.lower(), limit)
+    if data is None:
+        return JSONResponse(
+            {"error": f"Unknown stat: {stat}", "stats": leaders.list_stats()},
+            status_code=404,
+        )
+    return JSONResponse(data)
+
+
 @app.get("/api/weather")
 def api_weather(request: Request):
     data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
@@ -521,6 +547,17 @@ def odds_team(request: Request, team: str):
 def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
     min = max(1, min)
     return respond(request, streaks.render_streaks(min_streak=min))
+
+
+@app.get("/leaders")
+def leaders_today(request: Request):
+    return respond(request, leaders.render_leaders_dashboard())
+
+
+@app.get("/leaders/{stat}")
+def leaders_stat(request: Request, stat: str, limit: int = 25):
+    limit = max(1, min(limit, 50))
+    return respond(request, leaders.render_leaders_one(stat.lower(), count=limit))
 
 
 @app.get("/bestbets")

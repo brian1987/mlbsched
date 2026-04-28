@@ -700,6 +700,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings
     curl mlbsched.run/streaks              Teams on hot or cold runs (4+ games, ?min=N)
+    curl mlbsched.run/leaders              Top batting + pitching leaders (HR, AVG, OPS, W, ERA, K)
+    curl mlbsched.run/leaders/<STAT>       Top 25 in one stat (e.g. ops, era, whip, hr, sb)
     curl mlbsched.run/teams                All team abbreviations
 
   {BOLD}Examples:{RESET}
