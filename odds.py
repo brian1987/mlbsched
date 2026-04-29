@@ -47,6 +47,8 @@ BOOK_TAG: dict[str, str] = {
 }
 
 FULL_NAME_TO_ABV: dict[str, str] = {name: abv for abv, (_, name, _) in TEAMS.items()}
+# Aliases for legacy team names that some odds feeds may still return.
+FULL_NAME_TO_ABV["Oakland Athletics"] = "ATH"
 
 
 # ── API + cache ───────────────────────────────────────────────────────────────

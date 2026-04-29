@@ -107,10 +107,10 @@ curl mlbsched.run/api/live
 
 | | | | | | |
 |---|---|---|---|---|---|
-| ARI | ATL | BAL | BOS | CHC | CIN |
-| CLE | COL | CWS | DET | HOU | KC |
-| LAA | LAD | MIA | MIL | MIN | NYM |
-| NYY | OAK | PHI | PIT | SD | SEA |
+| ARI | ATH | ATL | BAL | BOS | CHC |
+| CIN | CLE | COL | CWS | DET | HOU |
+| KC | LAA | LAD | MIA | MIL | MIN |
+| NYM | NYY | PHI | PIT | SD | SEA |
 | SF | STL | TB | TEX | TOR | WSH |
 
 ## Run Locally
