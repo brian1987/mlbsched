@@ -74,6 +74,9 @@ curl mlbsched.run/weather
 # Today's games sorted by distance from your IP
 curl mlbsched.run/distance
 
+# Random mascot ASCII art
+curl mlbsched.run/random
+
 # All team abbreviations
 curl mlbsched.run/teams
 ```
@@ -101,6 +104,7 @@ curl mlbsched.run/api/bestbets
 curl mlbsched.run/api/weather
 curl mlbsched.run/api/distance
 curl mlbsched.run/api/live
+curl mlbsched.run/api/random
 ```
 
 ## Team Abbreviations

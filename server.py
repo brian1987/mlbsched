@@ -18,6 +18,7 @@ import wildcard
 import h2h
 import player
 import lineup
+import mascot
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -390,6 +391,11 @@ def api_weather(request: Request):
     return JSONResponse({"date": today_et().isoformat(), "games": games_out})
 
 
+@app.get("/api/random")
+def api_random():
+    return JSONResponse(mascot.build_random_json())
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
@@ -629,6 +635,11 @@ def bestbets_team(request: Request, team: str):
     if abv not in sched.TEAMS:
         return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
     return respond(request, bestbets.render_bestbets(team_abv=abv, tz=tz))
+
+
+@app.get("/random")
+def random_route(request: Request):
+    return respond(request, mascot.render_random())
 
 
 @app.get("/{segment}")
