@@ -8,6 +8,13 @@ primary_region = 'ewr'
 
 [build]
 
+[env]
+  MLBSCHED_DATA_DIR = '/data'
+
+[[mounts]]
+  source = 'mlbsched_data'
+  destination = '/data'
+
 [http_service]
   internal_port = 8080
   force_https = false

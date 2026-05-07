@@ -1,12 +1,15 @@
 """Request logging to SQLite — long-term metrics storage."""
 
 import hashlib
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "metrics.db"
+DB_DIR = Path(os.environ.get("MLBSCHED_DATA_DIR", Path(__file__).parent))
+DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DB_DIR / "metrics.db"
 
 _local = threading.local()
 
