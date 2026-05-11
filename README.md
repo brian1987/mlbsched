@@ -81,6 +81,15 @@ curl mlbsched.run/random
 curl mlbsched.run/teams
 ```
 
+## Admin
+
+```bash
+# Request metrics (last N days, default 30, max 365)
+# Requires MLBSCHED_METRICS_TOKEN env on the server (set via `fly secrets set`)
+curl -H "Authorization: Bearer $MLBSCHED_METRICS_TOKEN" mlbsched.run/metrics
+curl -H "Authorization: Bearer $MLBSCHED_METRICS_TOKEN" mlbsched.run/metrics?days=7
+```
+
 ## Stat aliases for `/leaders/<stat>`
 
 **Hitting:** `avg`, `obp`, `slg`, `ops`, `hr`, `rbi`, `r`, `h`, `2b`, `3b`, `sb`, `bb`, `so`, `tb`

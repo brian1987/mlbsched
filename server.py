@@ -1,7 +1,8 @@
 """mlbsched web server — serves ANSI text to curl, HTML to browsers"""
 
+import os
 from datetime import date, datetime, timedelta, timezone as _UTC
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -26,13 +27,17 @@ app = FastAPI(docs_url=None, redoc_url=None)
 def startup():
     db.init_db()
 
+_NO_LOG_PATHS = {"/favicon.ico", "/robots.txt"}
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     response = await call_next(request)
     try:
-        ip = get_client_ip(request)
-        ua = request.headers.get("user-agent", "")
-        db.log_request(request.url.path, ip, ua)
+        path = request.url.path
+        if path not in _NO_LOG_PATHS:
+            ip = get_client_ip(request)
+            ua = request.headers.get("user-agent", "")
+            db.log_request(path, ip, ua)
     except Exception:
         pass
     return response
@@ -75,10 +80,10 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
 </html>"""
 
 
-def respond(request: Request, content: str, refresh_secs: int | None = None):
+def respond(request: Request, content: str, refresh_secs: int | None = None, status_code: int = 200):
     if is_curl(request):
-        return text(content)
-    return HTMLResponse(html_wrap(content, refresh_secs))
+        return PlainTextResponse(content, status_code=status_code)
+    return HTMLResponse(html_wrap(content, refresh_secs), status_code=status_code)
 
 
 # ── IP geolocation ────────────────────────────────────────────────────────────
@@ -416,6 +421,19 @@ def api_team(request: Request, team: str):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+_ROBOTS_TXT = "User-agent: *\nDisallow: /metrics\nDisallow: /api/\nAllow: /\n"
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return PlainTextResponse(_ROBOTS_TXT)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
+
+
 @app.get("/")
 def root(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -475,6 +493,19 @@ def help_page(request: Request):
 
 @app.get("/metrics")
 def metrics(request: Request, days: int = 30):
+    expected = os.getenv("MLBSCHED_METRICS_TOKEN")
+    if not expected:
+        return PlainTextResponse(
+            "/metrics requires MLBSCHED_METRICS_TOKEN to be configured\n",
+            status_code=503,
+        )
+    auth = request.headers.get("authorization", "")
+    if not (auth.startswith("Bearer ") and auth[7:] == expected):
+        return PlainTextResponse(
+            "unauthorized — pass Authorization: Bearer <token>\n",
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     days = max(1, min(days, 365))
 
     daily = db.query("""
@@ -647,10 +678,18 @@ def one_segment(request: Request, segment: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     try:
         d = sched.parse_date(segment)
-        out = sched.render_schedule(d.strftime("%Y-%m-%d"), tz=tz)
+        return respond(request, sched.render_schedule(d.strftime("%Y-%m-%d"), tz=tz))
     except ValueError:
-        out = sched.render_schedule(today_et().strftime("%Y-%m-%d"), segment.upper(), tz=tz)
-    return respond(request, out)
+        pass
+    abv = segment.upper()
+    if abv in sched.TEAMS:
+        return respond(request, sched.render_schedule(today_et().strftime("%Y-%m-%d"), abv, tz=tz))
+    msg = (
+        f"\n  {sched.RED}Unknown: {segment}{sched.RESET}\n"
+        f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
+        f"  {sched.GRAY}     curl mlbsched.run/help{sched.RESET}\n"
+    )
+    return respond(request, msg, status_code=404)
 
 
 @app.get("/yesterday/{team}")
@@ -687,9 +726,16 @@ def tomorrow_team(request: Request, team: str):
 @app.get("/{team}/{date_str}")
 def team_date(request: Request, team: str, date_str: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        msg = (
+            f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
     try:
         d = sched.parse_date(date_str)
-        out = sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz)
     except ValueError:
-        out = f"Invalid date: {date_str}\n"
-    return respond(request, out)
+        msg = f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n"
+        return respond(request, msg, status_code=404)
+    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), abv, tz=tz))
