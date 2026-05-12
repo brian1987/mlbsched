@@ -20,6 +20,7 @@ import h2h
 import player
 import lineup
 import mascot
+import broadcasts
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -401,6 +402,21 @@ def api_random():
     return JSONResponse(mascot.build_random_json())
 
 
+@app.get("/api/broadcasts")
+def api_broadcasts(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return JSONResponse(broadcasts.build_broadcasts_json(tz=tz))
+
+
+@app.get("/api/broadcasts/{team}")
+def api_broadcasts_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    data = broadcasts.build_broadcasts_json(team_abv=team, tz=tz)
+    if "error" in data:
+        return JSONResponse(data, status_code=404)
+    return JSONResponse(data)
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
@@ -671,6 +687,18 @@ def bestbets_team(request: Request, team: str):
 @app.get("/random")
 def random_route(request: Request):
     return respond(request, mascot.render_random())
+
+
+@app.get("/broadcasts")
+def broadcasts_today(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, broadcasts.render_broadcasts(tz=tz))
+
+
+@app.get("/broadcasts/{team}")
+def broadcasts_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, broadcasts.render_broadcasts(team_abv=team, tz=tz))
 
 
 @app.get("/{segment}")

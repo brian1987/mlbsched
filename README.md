@@ -74,6 +74,10 @@ curl mlbsched.run/weather
 # Today's games sorted by distance from your IP
 curl mlbsched.run/distance
 
+# TV broadcasts for today's games (English, national + home/away local feeds)
+curl mlbsched.run/broadcasts
+curl mlbsched.run/broadcasts/NYM
+
 # Random mascot ASCII art
 curl mlbsched.run/random
 
@@ -114,6 +118,8 @@ curl mlbsched.run/api/weather
 curl mlbsched.run/api/distance
 curl mlbsched.run/api/live
 curl mlbsched.run/api/random
+curl mlbsched.run/api/broadcasts
+curl mlbsched.run/api/broadcasts/NYM
 ```
 
 ## Team Abbreviations
