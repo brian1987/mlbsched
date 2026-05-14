@@ -81,6 +81,9 @@ curl mlbsched.run/broadcasts/NYM
 # Random mascot ASCII art
 curl mlbsched.run/random
 
+# On this date in MLB history — games from 10, 25, and 50 years ago
+curl mlbsched.run/today
+
 # All team abbreviations
 curl mlbsched.run/teams
 ```
@@ -120,6 +123,7 @@ curl mlbsched.run/api/live
 curl mlbsched.run/api/random
 curl mlbsched.run/api/broadcasts
 curl mlbsched.run/api/broadcasts/NYM
+curl mlbsched.run/api/today
 ```
 
 ## Team Abbreviations

@@ -726,6 +726,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/broadcasts/<TEAM>    TV broadcasts for one team today
     curl mlbsched.run/teams                All team abbreviations
     curl mlbsched.run/random               Random MLB mascot ASCII art
+    curl mlbsched.run/today                On this date in MLB history (10/25/50 years ago)
 
   {BOLD}Examples:{RESET}
     curl mlbsched.run

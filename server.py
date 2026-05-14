@@ -21,6 +21,7 @@ import player
 import lineup
 import mascot
 import broadcasts
+import today as today_mod
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -402,6 +403,11 @@ def api_random():
     return JSONResponse(mascot.build_random_json())
 
 
+@app.get("/api/today")
+def api_today():
+    return JSONResponse(today_mod.build_today_json())
+
+
 @app.get("/api/broadcasts")
 def api_broadcasts(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -687,6 +693,11 @@ def bestbets_team(request: Request, team: str):
 @app.get("/random")
 def random_route(request: Request):
     return respond(request, mascot.render_random())
+
+
+@app.get("/today")
+def today_route(request: Request):
+    return respond(request, today_mod.render_today())
 
 
 @app.get("/broadcasts")
