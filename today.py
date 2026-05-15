@@ -5,7 +5,7 @@ from datetime import date
 
 from mlbsched import (
     BOLD, RESET, GRAY, GREEN, WHITE, DIM,
-    abv_from_id,
+    abv_from_team,
     fetch_schedule,
     fmt_team,
     fmt_score,
@@ -42,8 +42,8 @@ def _final_score_line(game: dict) -> str | None:
     home_score = home.get("score")
     if away_score is None or home_score is None:
         return None
-    away_abv = abv_from_id(away["team"]["id"])
-    home_abv = abv_from_id(home["team"]["id"])
+    away_abv = abv_from_team(away["team"])
+    home_abv = abv_from_team(home["team"])
     a_str = fmt_team(away_abv)
     h_str = fmt_team(home_abv)
     if away_score > home_score:
@@ -111,8 +111,8 @@ def build_today_json() -> dict:
             if away_score is None or home_score is None:
                 continue
             block["games"].append({
-                "away":       abv_from_id(away["team"]["id"]),
-                "home":       abv_from_id(home["team"]["id"]),
+                "away":       abv_from_team(away["team"]),
+                "home":       abv_from_team(home["team"]),
                 "away_score": away_score,
                 "home_score": home_score,
             })

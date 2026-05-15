@@ -67,6 +67,37 @@ TEAMS = {
 
 TEAM_ID_TO_ABV = {v[0]: k for k, v in TEAMS.items()}
 
+# Historical franchise names returned by the MLB API for old games. Maps the
+# name as the API gives it → the abbreviation that franchise actually used at
+# the time (so 1976 Expos show MON, not WSH; 1957 Dodgers show BRO, not LAD).
+HISTORICAL_NAME_TO_ABV = {
+    "Brooklyn Dodgers":              "BRO",
+    "New York Giants":               "NYG",
+    "Boston Braves":                 "BSN",
+    "Milwaukee Braves":              "MLN",
+    "Philadelphia Athletics":        "PHA",
+    "Kansas City Athletics":         "KCA",
+    "St. Louis Browns":              "SLB",
+    "Washington Senators":           "WSH",
+    "Seattle Pilots":                "SEP",
+    "Montreal Expos":                "MON",
+    "Houston Colt .45s":             "HOU",
+    "California Angels":             "CAL",
+    "Anaheim Angels":                "ANA",
+    "Los Angeles Angels of Anaheim": "LAA",
+    "Florida Marlins":               "FLA",
+    "Tampa Bay Devil Rays":          "TBD",
+    "Cincinnati Redlegs":            "CIN",
+}
+
+# Inherited color for historical abvs (matches the current franchise).
+HISTORICAL_ABV_COLOR = {
+    "BRO": BLUE,    "NYG": YELLOW,  "BSN": BLUE,    "MLN": BLUE,
+    "PHA": GREEN,   "KCA": GREEN,   "SLB": YELLOW,  "SEP": YELLOW,
+    "MON": RED,     "CAL": RED,     "ANA": RED,
+    "FLA": CYAN,    "TBD": BLUE,
+}
+
 # Stadium name, latitude, longitude
 STADIUMS = {
     "ARI": ("Chase Field",                  33.4453, -112.0667),
@@ -222,11 +253,22 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
 def team_color(abv: str) -> str:
+    if abv in HISTORICAL_ABV_COLOR:
+        return HISTORICAL_ABV_COLOR[abv]
     return TEAMS.get(abv, (None, None, WHITE))[2]
 
 
 def abv_from_id(team_id: int) -> str:
     return TEAM_ID_TO_ABV.get(team_id, "???")
+
+
+def abv_from_team(team: dict) -> str:
+    """Year-aware: prefers a historical name like 'Brooklyn Dodgers' (→ BRO)
+    over the current franchise abv (LAD) when the API returns the old name."""
+    hist = HISTORICAL_NAME_TO_ABV.get(team.get("name", ""))
+    if hist:
+        return hist
+    return abv_from_id(team.get("id"))
 
 
 def fmt_team(abv: str, width: int = 3) -> str:
