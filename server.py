@@ -72,13 +72,20 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
   <title>mlbsched.run</title>
   {refresh_tag}
   <style>
-    body {{ background: #0d1117; margin: 0; padding: 2rem; }}
-    pre  {{ color: #e6edf3; font-family: 'Fira Mono', 'Courier New', monospace;
-            font-size: 15px; line-height: 1.6; white-space: pre; }}
-    a    {{ color: #58a6ff; }}
+    body   {{ background: #0d1117; margin: 0; padding: 2rem; }}
+    pre    {{ color: #e6edf3; font-family: 'Fira Mono', 'Courier New', monospace;
+              font-size: 15px; line-height: 1.6; white-space: pre; }}
+    a      {{ color: #58a6ff; }}
+    footer {{ color: #6e7681; font-family: 'Fira Mono', 'Courier New', monospace;
+              font-size: 12px; margin-top: 1.5rem; padding-left: 2px; }}
+    footer a {{ color: #6e7681; text-decoration: none; }}
+    footer a:hover {{ color: #58a6ff; }}
   </style>
 </head>
-<body><pre>{clean}</pre></body>
+<body>
+<pre>{clean}</pre>
+<footer>by Brian Pisano · <a href="https://www.brianpisano.com" target="_blank" rel="noopener">brianpisano.com</a></footer>
+</body>
 </html>"""
 
 

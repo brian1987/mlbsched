@@ -775,6 +775,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/NYM
     curl mlbsched.run/NYM/1962-04-13          # first Mets home game, Polo Grounds
     curl mlbsched.run/standings
+
+  {GRAY}by Brian Pisano — brianpisano.com{RESET}
 """, file=_out)
     return buf.getvalue()
 
