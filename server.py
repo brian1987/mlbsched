@@ -520,6 +520,19 @@ def help_page(request: Request):
     return respond(request, sched.render_help())
 
 
+_BOT_PATH_PATTERNS = (
+    "%wp-%",          # /wp-admin, /wp-includes, /wp-login
+    "%xmlrpc%",       # /xmlrpc.php
+    "%wlwmanifest%",  # Windows Live Writer probe
+    "/.env%",         # secret scans
+    "/.git/%",        # git config / HEAD scans
+    "/.aws/%",
+    "%phpmyadmin%",
+)
+_BOT_FILTER_SQL = " AND " + " AND ".join(f"path NOT LIKE '{p}'" for p in _BOT_PATH_PATTERNS)
+_BOT_MATCH_SQL  = " AND (" + " OR ".join(f"path LIKE '{p}'" for p in _BOT_PATH_PATTERNS) + ")"
+
+
 @app.get("/metrics")
 def metrics(request: Request, days: int = 30):
     expected = os.getenv("MLBSCHED_METRICS_TOKEN")
@@ -549,10 +562,21 @@ def metrics(request: Request, days: int = 30):
         ORDER  BY date DESC
     """, (f"-{days} days",))
 
-    top_paths = db.query("""
+    top_paths = db.query(f"""
         SELECT path, COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
         FROM   requests
         WHERE  date >= date('now', ?)
+               {_BOT_FILTER_SQL}
+        GROUP  BY path
+        ORDER  BY total DESC
+        LIMIT  50
+    """, (f"-{days} days",))
+
+    bot_paths = db.query(f"""
+        SELECT path, COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
+        FROM   requests
+        WHERE  date >= date('now', ?)
+               {_BOT_MATCH_SQL}
         GROUP  BY path
         ORDER  BY total DESC
         LIMIT  15
@@ -564,6 +588,14 @@ def metrics(request: Request, days: int = 30):
         WHERE  date >= date('now', ?)
     """, (f"-{days} days",))[0]
 
+    bot_total_row = db.query(f"""
+        SELECT COUNT(*) AS total
+        FROM   requests
+        WHERE  date >= date('now', ?)
+               {_BOT_MATCH_SQL}
+    """, (f"-{days} days",))[0]
+    real_total = total_row["total"] - bot_total_row["total"]
+
     if not is_curl(request):
         rows_html = "\n".join(
             f"  <tr><td>{r['date']}</td><td>{r['total']}</td>"
@@ -573,6 +605,10 @@ def metrics(request: Request, days: int = 30):
         paths_html = "\n".join(
             f"  <tr><td>{r['path']}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
             for r in top_paths
+        )
+        bots_html = "\n".join(
+            f"  <tr><td>{r['path']}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
+            for r in bot_paths
         )
         html = f"""<!DOCTYPE html>
 <html>
@@ -587,20 +623,26 @@ def metrics(request: Request, days: int = 30):
     th    {{ color:#8b949e; text-align:left; padding:4px 12px 4px 0; border-bottom:1px solid #30363d; }}
     td    {{ padding:4px 12px 4px 0; border-bottom:1px solid #21262d; }}
     .sum  {{ color:#3fb950; font-weight:bold; }}
+    .dim  {{ color:#6e7681; }}
   </style>
 </head>
 <body>
   <h2>mlbsched.run — last {days} days</h2>
-  <p class="sum">Total requests: {total_row['total']} &nbsp;|&nbsp; Unique IPs: {total_row['uniq']}</p>
+  <p class="sum">Total: {total_row['total']} &nbsp;|&nbsp; Real: {real_total} &nbsp;|&nbsp; <span class="dim">Bots: {bot_total_row['total']}</span> &nbsp;|&nbsp; Unique IPs: {total_row['uniq']}</p>
   <h2>Daily breakdown</h2>
   <table>
     <tr><th>Date</th><th>Requests</th><th>Unique IPs</th><th>curl</th><th>Browser</th></tr>
     {rows_html}
   </table>
-  <h2>Top paths</h2>
+  <h2>Top paths <span class="dim" style="font-size:12px">(bot scanners filtered)</span></h2>
   <table>
     <tr><th>Path</th><th>Requests</th><th>Unique IPs</th></tr>
     {paths_html}
+  </table>
+  <h2 class="dim">Bot scanner noise</h2>
+  <table>
+    <tr><th class="dim">Path</th><th class="dim">Requests</th><th class="dim">Unique IPs</th></tr>
+    {bots_html}
   </table>
   <p style="color:#8b949e;margin-top:2rem">?days=N to change range (max 365) &nbsp;|&nbsp; raw data: metrics.db (SQLite)</p>
 </body>
@@ -608,7 +650,7 @@ def metrics(request: Request, days: int = 30):
         return HTMLResponse(html)
 
     lines = [f"mlbsched metrics — last {days} days", ""]
-    lines.append(f"Total requests : {total_row['total']}")
+    lines.append(f"Total requests : {total_row['total']}  (real: {real_total}, bots: {bot_total_row['total']})")
     lines.append(f"Unique IPs     : {total_row['uniq']}")
     lines.append("")
     lines.append(f"{'Date':<12} {'Requests':>9} {'Unique':>7} {'curl':>6} {'Browser':>8}")
@@ -616,10 +658,17 @@ def metrics(request: Request, days: int = 30):
     for r in daily:
         lines.append(f"{r['date']:<12} {r['total']:>9} {r['uniq']:>7} {r['curl_ct']:>6} {r['browser_ct']:>8}")
     lines.append("")
-    lines.append(f"{'Path':<30} {'Requests':>9} {'Unique':>7}")
-    lines.append("-" * 48)
+    lines.append("Top paths (bot scanners filtered)")
+    lines.append(f"{'Path':<40} {'Requests':>9} {'Unique':>7}")
+    lines.append("-" * 58)
     for r in top_paths:
-        lines.append(f"{r['path']:<30} {r['total']:>9} {r['uniq']:>7}")
+        lines.append(f"{r['path']:<40} {r['total']:>9} {r['uniq']:>7}")
+    lines.append("")
+    lines.append("Bot scanner noise")
+    lines.append(f"{'Path':<40} {'Requests':>9} {'Unique':>7}")
+    lines.append("-" * 58)
+    for r in bot_paths:
+        lines.append(f"{r['path']:<40} {r['total']:>9} {r['uniq']:>7}")
     return text("\n".join(lines) + "\n")
 
 
