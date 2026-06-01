@@ -1,4 +1,4 @@
-"""today — games played on this calendar date in MLB history"""
+"""onthisday — games played on this calendar date in MLB history"""
 
 import io
 from datetime import date
@@ -55,7 +55,7 @@ def _final_score_line(game: dict) -> str | None:
     return f"    {a_str} {a_sc}  {DIM}@{RESET}  {h_str} {h_sc}"
 
 
-def render_today(out=None) -> str:
+def render_onthisday(out=None) -> str:
     buf = io.StringIO()
     _out = out or buf
 
@@ -88,7 +88,7 @@ def render_today(out=None) -> str:
     return buf.getvalue()
 
 
-def build_today_json() -> dict:
+def build_onthisday_json() -> dict:
     today = today_et()
     out: dict = {
         "kind":  "this_day_in_history",

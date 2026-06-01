@@ -21,7 +21,7 @@ import player
 import lineup
 import mascot
 import broadcasts
-import today as today_mod
+import onthisday
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -411,8 +411,22 @@ def api_random():
 
 
 @app.get("/api/today")
-def api_today():
-    return JSONResponse(today_mod.build_today_json())
+def api_today(request: Request):
+    geo = geolocate_ip(get_client_ip(request))
+    user_lat = geo["lat"] if geo else None
+    user_lon = geo["lon"] if geo else None
+    tz = get_user_tz(geo)
+    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
+    games = []
+    for date_block in data.get("dates", []):
+        for game in date_block.get("games", []):
+            games.append(build_game_json(game, user_lat, user_lon, tz))
+    return JSONResponse({"date": today_et().isoformat(), "games": games})
+
+
+@app.get("/api/onthisday")
+def api_onthisday():
+    return JSONResponse(onthisday.build_onthisday_json())
 
 
 @app.get("/api/broadcasts")
@@ -753,7 +767,13 @@ def random_route(request: Request):
 
 @app.get("/today")
 def today_route(request: Request):
-    return respond(request, today_mod.render_today())
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, sched.render_schedule(today_et().strftime("%Y-%m-%d"), tz=tz))
+
+
+@app.get("/onthisday")
+def onthisday_route(request: Request):
+    return respond(request, onthisday.render_onthisday())
 
 
 @app.get("/broadcasts")
