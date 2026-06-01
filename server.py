@@ -22,6 +22,7 @@ import lineup
 import mascot
 import broadcasts
 import onthisday
+import wp
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -444,6 +445,21 @@ def api_broadcasts_team(request: Request, team: str):
     return JSONResponse(data)
 
 
+@app.get("/api/wp/{team}")
+def api_wp(team: str):
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return JSONResponse(wp.build_wp_json(team, d))
+
+
+@app.get("/api/wp/{team}/{date_str}")
+def api_wp_date(team: str, date_str: str):
+    try:
+        d = sched.parse_date(date_str)
+    except ValueError:
+        return JSONResponse({"error": f"Invalid date: {date_str}"}, status_code=400)
+    return JSONResponse(wp.build_wp_json(team, d.strftime("%Y-%m-%d")))
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
@@ -538,10 +554,19 @@ _BOT_PATH_PATTERNS = (
     "%wp-%",          # /wp-admin, /wp-includes, /wp-login
     "%xmlrpc%",       # /xmlrpc.php
     "%wlwmanifest%",  # Windows Live Writer probe
-    "/.env%",         # secret scans
-    "/.git/%",        # git config / HEAD scans
-    "/.aws/%",
     "%phpmyadmin%",
+    "%.php%",         # any PHP probe (app serves no PHP)
+    "%.env%",         # .env scans at root or nested (/app/.env, /config/.env, …)
+    "%/.git%",        # git config / HEAD scans
+    "%/.aws%",
+    "%/.vscode%",
+    "%/.idea%",
+    "%_profiler%",    # Symfony profiler probes
+    "%phpinfo%",
+    "%.json",         # credentials/secrets/service-account scans (app serves none)
+    "%.zip",          # /source.zip, /backup.zip dumps
+    "%.sql",
+    "%.bak",
 )
 _BOT_FILTER_SQL = " AND " + " AND ".join(f"path NOT LIKE '{p}'" for p in _BOT_PATH_PATTERNS)
 _BOT_MATCH_SQL  = " AND (" + " OR ".join(f"path LIKE '{p}'" for p in _BOT_PATH_PATTERNS) + ")"
@@ -788,6 +813,23 @@ def broadcasts_team(request: Request, team: str):
     return respond(request, broadcasts.render_broadcasts(team_abv=team, tz=tz))
 
 
+@app.get("/wp/{team}")
+def wp_route(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return respond(request, wp.render_wp(team, d, tz=tz))
+
+
+@app.get("/wp/{team}/{date_str}")
+def wp_route_date(request: Request, team: str, date_str: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    try:
+        d = sched.parse_date(date_str)
+    except ValueError:
+        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n")
+    return respond(request, wp.render_wp(team, d.strftime("%Y-%m-%d"), tz=tz))
+
+
 @app.get("/{segment}")
 def one_segment(request: Request, segment: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -811,14 +853,14 @@ def one_segment(request: Request, segment: str):
 def yesterday_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz))
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
 
 
 @app.get("/box/{team}")
 def box_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz))
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
 
 
 @app.get("/box/{team}/{date_str}")
@@ -828,7 +870,7 @@ def box_team_date(request: Request, team: str, date_str: str):
         d = sched.parse_date(date_str)
     except ValueError:
         return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n")
-    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz))
+    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
 
 
 @app.get("/tomorrow/{team}")
@@ -853,4 +895,4 @@ def team_date(request: Request, team: str, date_str: str):
     except ValueError:
         msg = f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n"
         return respond(request, msg, status_code=404)
-    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), abv, tz=tz))
+    return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), abv, tz=tz, extra_per_game=wp.render_wp_for_game))

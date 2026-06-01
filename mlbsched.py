@@ -493,8 +493,12 @@ def render_boxscore(game: dict, out=None) -> str:
     return buf.getvalue()
 
 
-def render_team_recap(date_str: str, team_abv: str, out=None, tz: ZoneInfo | None = None) -> str:
-    """Score line + boxscore for each of a team's games on a given date. Reusable by /box/{team}/{date}."""
+def render_team_recap(date_str: str, team_abv: str, out=None, tz: ZoneInfo | None = None,
+                      extra_per_game=None) -> str:
+    """Score line + boxscore for each of a team's games on a given date. Reusable by /box/{team}/{date}.
+
+    `extra_per_game(game) -> str` is called after each boxscore and its return value
+    is appended verbatim (used by /box to inject the WP sparkline)."""
     buf = io.StringIO()
     _out = out or buf
 
@@ -528,6 +532,10 @@ def render_team_recap(date_str: str, team_abv: str, out=None, tz: ZoneInfo | Non
         box = render_boxscore(game)
         if box:
             print(box, file=_out, end="")
+        if extra_per_game:
+            extra = extra_per_game(game)
+            if extra:
+                print(extra, file=_out, end="")
 
     p()
     return buf.getvalue()
@@ -770,6 +778,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/random               Random MLB mascot ASCII art
     curl mlbsched.run/today                Today's schedule only (minimal scoreboard)
     curl mlbsched.run/onthisday            On this date in MLB history (10/25/50 years ago)
+    curl mlbsched.run/wp/<TEAM>            Win-probability sparkline for the team's last completed game
+    curl mlbsched.run/wp/<TEAM>/<DATE>     Win-probability sparkline for a specific date
 
   {BOLD}Examples:{RESET}
     curl mlbsched.run

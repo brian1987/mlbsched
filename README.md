@@ -87,6 +87,10 @@ curl mlbsched.run/today
 # On this date in MLB history — games from 10, 25, and 50 years ago
 curl mlbsched.run/onthisday
 
+# Win-probability sparkline for a team's completed game(s) on a date (defaults to yesterday)
+curl mlbsched.run/wp/NYM
+curl mlbsched.run/wp/NYM/2025-10-04
+
 # All team abbreviations
 curl mlbsched.run/teams
 ```
@@ -128,6 +132,8 @@ curl mlbsched.run/api/broadcasts
 curl mlbsched.run/api/broadcasts/NYM
 curl mlbsched.run/api/today
 curl mlbsched.run/api/onthisday
+curl mlbsched.run/api/wp/NYM
+curl mlbsched.run/api/wp/NYM/2025-10-04
 ```
 
 ## Team Abbreviations
