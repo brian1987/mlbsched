@@ -1,7 +1,9 @@
 """mlbsched web server — serves ANSI text to curl, HTML to browsers"""
 
 import os
+import re
 import time
+import html as _html
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
@@ -89,9 +91,60 @@ def text(content: str):
     return PlainTextResponse(content)
 
 
+# ANSI SGR code → CSS color. Palette matches the OG card + page chrome (GitHub dark)
+# so terminal, browser, and social card all read as one product. Closed set — the
+# renderer only emits these (see mlbsched.py); any other code is dropped.
+_ANSI_FG = {
+    "90":       "#6e7681",  # gray
+    "91":       "#f85149",  # red
+    "92":       "#3fb950",  # green
+    "93":       "#d29922",  # yellow
+    "94":       "#58a6ff",  # blue
+    "96":       "#39c5cf",  # cyan
+    "97":       "#e6edf3",  # white (default fg)
+    "38;5;208": "#ff7b00",  # 256-color orange (accent)
+}
+_ANSI_RE = re.compile(r"\033\[([0-9;]*)m")
+
+
+def ansi_to_html(content: str) -> str:
+    """Translate the renderer's ANSI color codes into HTML-escaped colored spans."""
+    out: list[str] = []
+    color: str | None = None
+    bold = dim = False
+
+    def emit(chunk: str) -> None:
+        if not chunk:
+            return
+        esc = _html.escape(chunk)
+        styles = []
+        if color:
+            styles.append(f"color:{color}")
+        if bold:
+            styles.append("font-weight:bold")
+        if dim:
+            styles.append("opacity:0.6")
+        out.append(f'<span style="{";".join(styles)}">{esc}</span>' if styles else esc)
+
+    pos = 0
+    for m in _ANSI_RE.finditer(content):
+        emit(content[pos:m.start()])
+        code = m.group(1)
+        if code in ("", "0"):
+            color, bold, dim = None, False, False
+        elif code == "1":
+            bold = True
+        elif code == "2":
+            dim = True
+        elif code in _ANSI_FG:
+            color = _ANSI_FG[code]
+        pos = m.end()
+    emit(content[pos:])
+    return "".join(out)
+
+
 def html_wrap(content: str, refresh_secs: int | None = None) -> str:
-    import re
-    clean = re.sub(r"\033\[[0-9;]*m", "", content)
+    clean = ansi_to_html(content)
     refresh_tag = f'<meta http-equiv="refresh" content="{refresh_secs}">' if refresh_secs else ""
     title = "mlbsched.run — MLB scores and schedule in your terminal"
     desc  = ("Live MLB scores, schedules, standings, odds, and 30+ commands — "
