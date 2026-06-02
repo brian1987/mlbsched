@@ -4,6 +4,7 @@
 import sys
 import io
 import math
+import time
 from datetime import date, datetime, timedelta, timezone as _UTC
 from zoneinfo import ZoneInfo
 import requests
@@ -147,7 +148,22 @@ MLB_API = "https://statsapi.mlb.com/api/v1"
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
+# ── schedule fetch: short TTL cache + serve-stale-on-error ──────────────────────
+# Collapses a burst of requests (e.g. a front-page traffic spike) into ~1 upstream
+# call, and serves the last good payload if the MLB API hiccups rather than failing
+# the request. Keyed by (date, team); bounded so a flood of distinct dates can't
+# grow it without limit.
+_SCHED_TTL_SECONDS = 45
+_sched_cache: dict[tuple, tuple[float, dict]] = {}   # key -> (fetched_at_monotonic, data)
+
+
 def fetch_schedule(date_str: str, team_id: int | None = None) -> dict:
+    key = (date_str, team_id)
+    now = time.monotonic()
+    cached = _sched_cache.get(key)
+    if cached is not None and now - cached[0] < _SCHED_TTL_SECONDS:
+        return cached[1]
+
     params = {
         "sportId": 1,
         "date": date_str,
@@ -155,10 +171,21 @@ def fetch_schedule(date_str: str, team_id: int | None = None) -> dict:
     }
     if team_id:
         params["teamId"] = team_id
-    resp = requests.get(f"{MLB_API}/schedule", params=params, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = requests.get(f"{MLB_API}/schedule", params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        if cached is not None:
+            return cached[1]   # stale beats a 500 — serve the last good payload
+        raise
+
     _enrich_probable_pitchers(data)
+    if len(_sched_cache) > 256:      # drop expired entries before they accumulate
+        for k, (t, _) in list(_sched_cache.items()):
+            if now - t >= _SCHED_TTL_SECONDS:
+                del _sched_cache[k]
+    _sched_cache[key] = (now, data)
     return data
 
 

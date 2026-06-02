@@ -1,9 +1,11 @@
 """mlbsched web server — serves ANSI text to curl, HTML to browsers"""
 
 import os
+import time
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests as _requests
@@ -30,19 +32,33 @@ app = FastAPI(docs_url=None, redoc_url=None)
 def startup():
     db.init_db()
 
-_NO_LOG_PATHS = {"/favicon.ico", "/robots.txt"}
+_OG_IMAGE = Path(__file__).resolve().parent / "static" / "og.png"
+
+# Paths skipped by request logging. These also skip the cache/Vary defaults below,
+# so static + boilerplate responses keep whatever headers their handler set.
+_NO_LOG_PATHS = {"/favicon.ico", "/robots.txt", "/og.png"}
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    path = request.url.path
     response = await call_next(request)
+    if path in _NO_LOG_PATHS:
+        return response
     try:
-        path = request.url.path
-        if path not in _NO_LOG_PATHS:
-            ip = get_client_ip(request)
-            ua = request.headers.get("user-agent", "")
-            db.log_request(path, ip, ua)
+        ip = get_client_ip(request)
+        ua = request.headers.get("user-agent", "")
+        db.log_request(path, ip, ua)
     except Exception:
         pass
+    # Responses vary by User-Agent (curl text vs browser HTML) and viewer timezone,
+    # so they can't be shared across users — mark private + briefly cacheable per
+    # client. /metrics is sensitive; never store it. Only fill in defaults a handler
+    # didn't set explicitly.
+    if "cache-control" not in response.headers:
+        response.headers["Cache-Control"] = (
+            "no-store" if path == "/metrics" else "private, max-age=30"
+        )
+    response.headers.setdefault("Vary", "User-Agent")
     return response
 
 app.add_middleware(
@@ -51,6 +67,17 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(_requests.RequestException)
+async def upstream_unavailable(request: Request, exc: _requests.RequestException):
+    """Site-wide backstop: if any upstream (MLB, odds, weather, ip-api) fails and the
+    handler didn't recover, degrade to a friendly 503 instead of a bare 500."""
+    msg = "Upstream data source is temporarily unavailable. Please try again shortly.\n"
+    headers = {"Retry-After": "30", "Cache-Control": "no-store"}
+    if is_curl(request):
+        return PlainTextResponse(msg, status_code=503, headers=headers)
+    return HTMLResponse(html_wrap(f"\n  {msg}"), status_code=503, headers=headers)
 
 
 def is_curl(request: Request) -> bool:
@@ -66,11 +93,28 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
     import re
     clean = re.sub(r"\033\[[0-9;]*m", "", content)
     refresh_tag = f'<meta http-equiv="refresh" content="{refresh_secs}">' if refresh_secs else ""
+    title = "mlbsched.run — MLB scores and schedule in your terminal"
+    desc  = ("Live MLB scores, schedules, standings, odds, and 30+ commands — "
+             "straight from your terminal with curl, or in the browser.")
     return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>mlbsched.run</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <meta name="description" content="{desc}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="mlbsched.run">
+  <meta property="og:title" content="{title}">
+  <meta property="og:description" content="{desc}">
+  <meta property="og:url" content="https://mlbsched.run/">
+  <meta property="og:image" content="https://mlbsched.run/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{title}">
+  <meta name="twitter:description" content="{desc}">
+  <meta name="twitter:image" content="https://mlbsched.run/og.png">
   {refresh_tag}
   <style>
     body   {{ background: #0d1117; margin: 0; padding: 2rem; }}
@@ -105,8 +149,8 @@ def get_client_ip(request: Request) -> str:
     return request.client.host
 
 
-def geolocate_ip(ip: str) -> dict | None:
-    """Returns {lat, lon, city, region, country, timezone} or None on failure/private IP."""
+def _geo_lookup(ip: str) -> dict | None:
+    """Uncached network call to ip-api. Returns geo dict or None on failure/private IP."""
     try:
         resp = _requests.get(f"http://ip-api.com/json/{ip}", timeout=3)
         data = resp.json()
@@ -122,6 +166,31 @@ def geolocate_ip(ip: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+# In-process TTL cache over ip-api lookups. The free tier rate-limits at ~45 req/min,
+# so under a traffic spike every uncached request would otherwise burn quota and stall.
+# Successes live 6h (a viewer's location is stable); failures live 60s so a transient
+# rate-limit or outage doesn't pin a client to "unknown" for hours.
+_GEO_TTL_OK   = 6 * 60 * 60
+_GEO_TTL_FAIL = 60
+_geo_cache: dict[str, tuple[float, dict | None]] = {}   # ip -> (expires_at_monotonic, geo)
+
+
+def geolocate_ip(ip: str) -> dict | None:
+    """Returns {lat, lon, city, region, country, timezone} or None on failure/private IP."""
+    now = time.monotonic()
+    cached = _geo_cache.get(ip)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+
+    geo = _geo_lookup(ip)
+    if len(_geo_cache) > 10_000:        # drop expired entries before they accumulate
+        for k, (exp, _) in list(_geo_cache.items()):
+            if now >= exp:
+                del _geo_cache[k]
+    _geo_cache[ip] = (now + (_GEO_TTL_OK if geo else _GEO_TTL_FAIL), geo)
+    return geo
 
 
 def get_user_tz(geo: dict | None) -> ZoneInfo | None:
@@ -491,6 +560,17 @@ def robots_txt():
 @app.get("/favicon.ico")
 def favicon():
     return Response(status_code=204)
+
+
+@app.get("/og.png")
+def og_image():
+    if not _OG_IMAGE.is_file():
+        return Response(status_code=404)
+    return FileResponse(
+        _OG_IMAGE,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
 
 
 @app.get("/")
