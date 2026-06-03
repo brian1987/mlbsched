@@ -170,19 +170,54 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
   <meta name="twitter:image" content="https://mlbsched.run/og.png">
   {refresh_tag}
   <style>
+    html   {{ color-scheme: dark; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }}
     body   {{ background: #0d1117; margin: 0; padding: 2rem; }}
     pre    {{ color: #e6edf3; font-family: 'Fira Mono', 'Courier New', monospace;
-              font-size: 15px; line-height: 1.6; white-space: pre; }}
+              font-size: 15px; line-height: 1.6; white-space: pre; margin: 0;
+              overflow-x: auto; -webkit-overflow-scrolling: touch; }}
     a      {{ color: #58a6ff; }}
     footer {{ color: #6e7681; font-family: 'Fira Mono', 'Courier New', monospace;
               font-size: 12px; margin-top: 1.5rem; padding-left: 2px; }}
     footer a {{ color: #6e7681; text-decoration: none; }}
     footer a:hover {{ color: #58a6ff; }}
+    /* Phones: trim padding and shrink the monospace grid (alignment preserved).
+       These are the no-JS fallback; the fit() script below tunes the exact size
+       so any view fits the viewport, with overflow-x as the last resort. */
+    @media (max-width: 600px) {{
+      body   {{ padding: 1rem 0.75rem; }}
+      pre    {{ font-size: 13px; line-height: 1.5; }}
+      footer {{ padding-left: 0.75rem; }}
+    }}
+    @media (max-width: 400px) {{
+      pre    {{ font-size: 11px; }}
+    }}
   </style>
 </head>
 <body>
 <pre>{clean}</pre>
 <footer>by Brian Pisano · <a href="https://www.brianpisano.com" target="_blank" rel="noopener">brianpisano.com</a></footer>
+<script>
+// Scale the monospace block down just enough that its widest line fits the
+// screen, so fixed-width views read at a glance on phones without sideways
+// scrolling. No-op when content already fits (e.g. desktop). Floor at 8px;
+// below that, CSS overflow-x lets the user scroll instead.
+(function () {{
+  var pre = document.querySelector('pre');
+  if (!pre) return;
+  function fit() {{
+    pre.style.fontSize = '';                       // reset to CSS/media-query size
+    var base = parseFloat(getComputedStyle(pre).fontSize);
+    var bs = getComputedStyle(document.body);
+    var avail = document.documentElement.clientWidth
+              - parseFloat(bs.paddingLeft) - parseFloat(bs.paddingRight);
+    if (pre.scrollWidth > avail) {{
+      pre.style.fontSize = Math.max(8, base * avail / pre.scrollWidth) + 'px';
+    }}
+  }}
+  fit();
+  addEventListener('resize', fit);
+}})();
+</script>
 </body>
 </html>"""
 
@@ -786,6 +821,7 @@ def metrics(request: Request, days: int = 30):
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>mlbsched metrics</title>
   <style>
     body  {{ background:#0d1117; color:#e6edf3; font-family:'Fira Mono','Courier New',monospace;
