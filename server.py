@@ -1035,6 +1035,15 @@ def box_team(request: Request, team: str):
 @app.get("/box/{team}/{date_str}")
 def box_team_date(request: Request, team: str, date_str: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    if date_str.lower() == "random":
+        d_str = sched.random_recap_date(team.upper())
+        if not d_str:
+            msg = (
+                f"\n  {sched.RED}Couldn't find a game for {team.upper()}{sched.RESET}\n"
+                f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
+            )
+            return respond(request, msg, status_code=404)
+        return respond(request, sched.render_team_recap(d_str, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
     try:
         d = sched.parse_date(date_str)
     except ValueError:

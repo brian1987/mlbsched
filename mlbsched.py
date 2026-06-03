@@ -5,6 +5,7 @@ import sys
 import io
 import math
 import time
+import random
 from datetime import date, datetime, timedelta, timezone as _UTC
 from zoneinfo import ZoneInfo
 import requests
@@ -332,6 +333,67 @@ def parse_date(s: str) -> date:
     except (ValueError, TypeError):
         pass
     raise ValueError(f"Unrecognized date format: {s}")
+
+
+# First season the current franchise (by today's teamId) played, used to bound
+# the random-history picker. Pre-1901 franchises are floored at 1901, where MLB
+# statsapi boxscore coverage becomes reliable. Continuity follows the franchise,
+# not the city: BAL traces to the 1901 Milwaukee Brewers/St. Louis Browns, etc.
+FRANCHISE_FIRST_SEASON = {
+    "ARI": 1998, "ATL": 1901, "BAL": 1901, "BOS": 1901, "CHC": 1901,
+    "CWS": 1901, "CIN": 1901, "CLE": 1901, "COL": 1993, "DET": 1901,
+    "HOU": 1962, "KC":  1969, "LAA": 1961, "LAD": 1901, "MIA": 1993,
+    "MIL": 1969, "MIN": 1901, "NYM": 1962, "NYY": 1903, "ATH": 1901,
+    "PHI": 1901, "PIT": 1901, "SD":  1969, "SF":  1901, "SEA": 1977,
+    "STL": 1901, "TB":  1998, "TEX": 1961, "TOR": 1977, "WSH": 1969,
+}
+
+# Past-season schedules never change, so cache them: (team_id, year) -> [game].
+_season_cache: dict[tuple[int, int], list[dict]] = {}
+
+
+def _final_games_for_season(team_id: int, year: int) -> list[dict]:
+    """Completed regular-season games for a team in a season (cached for past years)."""
+    key = (team_id, year)
+    if year < today_et().year and key in _season_cache:
+        return _season_cache[key]
+    try:
+        resp = requests.get(
+            f"{MLB_API}/schedule",
+            params={"sportId": 1, "teamId": team_id, "season": year, "gameType": "R"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return []
+    finals = [
+        g
+        for block in data.get("dates", [])
+        for g in block.get("games", [])
+        if g.get("status", {}).get("abstractGameState") == "Final"
+    ]
+    if year < today_et().year:
+        _season_cache[key] = finals
+    return finals
+
+
+def random_recap_date(team_abv: str) -> str | None:
+    """Pick the date of a random completed regular-season game from the team's
+    history. Returns 'YYYY-MM-DD' (the game's official date) or None if no game
+    could be found (unknown team or repeated API failures)."""
+    abv = team_abv.upper()
+    if abv not in TEAMS:
+        return None
+    team_id = TEAMS[abv][0]
+    years = list(range(FRANCHISE_FIRST_SEASON.get(abv, 1901), today_et().year + 1))
+    random.shuffle(years)
+    for year in years[:6]:        # cap API attempts; a season almost always has games
+        finals = _final_games_for_season(team_id, year)
+        if finals:
+            game = random.choice(finals)
+            return game.get("officialDate") or game.get("gameDate", "")[:10]
+    return None
 
 
 def fmt_game_time(gt_str: str, tz: ZoneInfo | None = None) -> str:
@@ -787,6 +849,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/live                 All games in progress right now
     curl mlbsched.run/box/<TEAM>           Yesterday's boxscore for a team
     curl mlbsched.run/box/<TEAM>/<DATE>    Boxscore for a team on a specific date
+    curl mlbsched.run/box/<TEAM>/random    Boxscore from a random game in history
     curl mlbsched.run/distance             Today's games sorted by distance from you
     curl mlbsched.run/odds                 Today's odds — best NY sportsbook price per market
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
