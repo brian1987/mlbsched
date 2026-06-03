@@ -30,9 +30,10 @@ curl mlbsched.run/yesterday/NYM
 # Live scores (auto-refresh in browser)
 curl mlbsched.run/live
 
-# Boxscore for a team's last/specific game
+# Boxscore for a team's last/specific game (or a random one from team history)
 curl mlbsched.run/box/NYM
 curl mlbsched.run/box/NYM/2026-04-20
+curl mlbsched.run/box/NYM/random
 
 # Division standings (W-L, PCT, GB, last-10, run differential)
 curl mlbsched.run/standings
