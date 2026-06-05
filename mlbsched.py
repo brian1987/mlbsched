@@ -868,6 +868,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/random               Random MLB mascot ASCII art
     curl mlbsched.run/today                Today's schedule only (minimal scoreboard)
     curl mlbsched.run/onthisday            On this date in MLB history (10/25/50 years ago)
+    curl mlbsched.run/birthdays            Active players born on today's date
     curl mlbsched.run/wp/<TEAM>            Win-probability sparkline for the team's last completed game
     curl mlbsched.run/wp/<TEAM>/<DATE>     Win-probability sparkline for a specific date
 
