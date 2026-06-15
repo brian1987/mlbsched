@@ -91,6 +91,9 @@ curl mlbsched.run/onthisday
 # Active players born on today's date
 curl mlbsched.run/birthdays
 
+# All-time legends born on today's date (ranked by seasons played)
+curl mlbsched.run/birthdays/all
+
 # Win-probability sparkline for a team's completed game(s) on a date (defaults to yesterday)
 curl mlbsched.run/wp/NYM
 curl mlbsched.run/wp/NYM/2025-10-04
@@ -137,6 +140,7 @@ curl mlbsched.run/api/broadcasts/NYM
 curl mlbsched.run/api/today
 curl mlbsched.run/api/onthisday
 curl mlbsched.run/api/birthdays
+curl mlbsched.run/api/birthdays/all
 curl mlbsched.run/api/wp/NYM
 curl mlbsched.run/api/wp/NYM/2025-10-04
 ```

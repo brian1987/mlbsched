@@ -588,6 +588,11 @@ def api_onthisday():
     return JSONResponse(onthisday.build_onthisday_json())
 
 
+@app.get("/api/birthdays/all")
+def api_birthdays_alltime():
+    return JSONResponse(birthdays.build_birthdays_alltime_json())
+
+
 @app.get("/api/birthdays")
 def api_birthdays():
     return JSONResponse(birthdays.build_birthdays_json())
@@ -974,6 +979,11 @@ def today_route(request: Request):
 @app.get("/onthisday")
 def onthisday_route(request: Request):
     return respond(request, onthisday.render_onthisday())
+
+
+@app.get("/birthdays/all")
+def birthdays_alltime_route(request: Request):
+    return respond(request, birthdays.render_birthdays_alltime())
 
 
 @app.get("/birthdays")

@@ -1,18 +1,23 @@
-"""birthdays — active MLB players born on today's calendar date.
+"""birthdays — players born on today's calendar date.
 
-v1 covers current-season (active) players, so ages are always live and the
-single roster fetch keeps it fast. An all-time "legends born today" mode would
-mean sweeping historical seasons (the /api/v1/sports/1/players?season= endpoint
-serves them) — a natural future expansion if we want Ruth & Mays in the mix.
+Two modes:
+- /birthdays      active (current-season) players, fetched live so ages are
+                  always current and it's a single fast roster call.
+- /birthdays/all  all-time "legends born today", served from a precomputed
+                  static index (static/birthdays_alltime.json, built offline by
+                  tools/build_birthdays_alltime.py). Sweeping ~150 seasons live
+                  would be too slow for a request, so we bake it once.
 """
 
 import io
+import json
 import time
+from pathlib import Path
 
 import requests
 
 from mlbsched import (
-    BOLD, RESET, GRAY, GREEN, WHITE, DIM,
+    BOLD, RESET, GRAY, GREEN, WHITE, DIM, CYAN,
     MLB_API,
     TEAM_ID_TO_ABV,
     fmt_team,
@@ -81,6 +86,7 @@ def render_birthdays(out=None) -> str:
     players = _born_today()
     if not players:
         print(f"  {GRAY}No active players were born on this date.{RESET}", file=_out)
+        print(f"  {DIM}all-time legends born today: /birthdays/all{RESET}", file=_out)
         print(file=_out)
         return buf.getvalue()
 
@@ -99,6 +105,7 @@ def render_birthdays(out=None) -> str:
             file=_out,
         )
 
+    print(f"  {DIM}all-time legends born today: /birthdays/all{RESET}", file=_out)
     print(file=_out)
     return buf.getvalue()
 
@@ -122,3 +129,105 @@ def build_birthdays_json() -> dict:
             "birthplace": _birthplace(p),
         })
     return out
+
+
+# ── all-time "legends born today" ───────────────────────────────────────────────
+# Served from a static index built offline (see module docstring). Loaded once
+# and held for the life of the process — the file is shipped in the image.
+_ALLTIME_PATH = Path(__file__).resolve().parent / "static" / "birthdays_alltime.json"
+_alltime_cache: dict | None = None
+# How many to print in the terminal view; the JSON API returns the full day.
+_RENDER_LIMIT = 18
+
+
+def _alltime_index() -> dict:
+    global _alltime_cache
+    if _alltime_cache is None:
+        try:
+            _alltime_cache = json.loads(_ALLTIME_PATH.read_text())
+        except (OSError, ValueError):
+            _alltime_cache = {"days": {}}
+    return _alltime_cache
+
+
+def _legends_today() -> list[dict]:
+    today = today_et()
+    mmdd = f"{today.month:02d}-{today.day:02d}"
+    return _alltime_index().get("days", {}).get(mmdd, [])
+
+
+def _span(e: dict) -> str:
+    """e.g. '1914–1935' from debut/last dates."""
+    debut = (e.get("debut") or "")[:4]
+    last = (e.get("last") or "")[:4]
+    if debut and last:
+        return f"{debut}–{last}"
+    return debut or last or "?"
+
+
+def render_birthdays_alltime(out=None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    today = today_et()
+    label = today.strftime("%B %-d")
+
+    print(file=_out)
+    print(f"  {BOLD}MLB legends born on {label}{RESET}", file=_out)
+    print(f"  {GRAY}{'─' * 58}{RESET}", file=_out)
+
+    players = _legends_today()
+    if not players:
+        print(f"  {GRAY}No players on record were born on this date.{RESET}", file=_out)
+        print(file=_out)
+        return buf.getvalue()
+
+    for e in players[:_RENDER_LIMIT]:
+        name = f"{BOLD}{WHITE}{e['name']}{RESET}"
+        pos = e.get("pos") or "?"
+        span = _span(e)
+        seasons = e.get("seasons")
+        seas = f"{seasons} yr" if seasons else ""
+        # Nickname is the fun bit; fall back to birthplace when there isn't one.
+        tail = f'"{e["nick"]}"' if e.get("nick") else _legend_birthplace(e)
+        died = f"  {GRAY}d. {e['death'][:4]}{RESET}" if e.get("death") else ""
+        print(
+            f"  {name:<30} {GRAY}{pos:<4}{RESET} {GREEN}{span:<9}{RESET} "
+            f"{CYAN}{seas:<6}{RESET} {DIM}{tail}{RESET}{died}",
+            file=_out,
+        )
+
+    extra = len(players) - _RENDER_LIMIT
+    if extra > 0:
+        print(f"  {GRAY}… and {extra} more — see /api/birthdays/all{RESET}", file=_out)
+    print(f"  {DIM}ranked by seasons in the majors · active players: /birthdays{RESET}", file=_out)
+    print(file=_out)
+    return buf.getvalue()
+
+
+def _legend_birthplace(e: dict) -> str:
+    return ", ".join(part for part in (e.get("city"), e.get("region")) if part)
+
+
+def build_birthdays_alltime_json() -> dict:
+    today = today_et()
+    return {
+        "kind":  "birthdays_alltime",
+        "month": today.month,
+        "day":   today.day,
+        "generated": _alltime_index().get("generated"),
+        "players": [
+            {
+                "name":       e.get("name"),
+                "nickname":   e.get("nick"),
+                "position":   e.get("pos"),
+                "birth_date": e.get("birth"),
+                "debut":      e.get("debut"),
+                "last_played": e.get("last"),
+                "death_date": e.get("death"),
+                "seasons":    e.get("seasons"),
+                "birthplace": _legend_birthplace(e),
+            }
+            for e in _legends_today()
+        ],
+    }
