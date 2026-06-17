@@ -28,6 +28,7 @@ import broadcasts
 import onthisday
 import birthdays
 import wp
+import ical
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -1001,6 +1002,32 @@ def broadcasts_today(request: Request):
 def broadcasts_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     return respond(request, broadcasts.render_broadcasts(team_abv=team, tz=tz))
+
+
+@app.get("/ical")
+def ical_index(request: Request):
+    return respond(request, ical.render_index())
+
+
+@app.get("/ical/{filename}")
+def ical_feed(filename: str):
+    # Accept /ical/NYM.ics (calendar apps want the extension) and /ical/NYM.
+    abv = filename.upper()
+    if abv.endswith(".ICS"):
+        abv = abv[:-4]
+    body = ical.render_ical(abv)
+    if body is None:
+        return PlainTextResponse(f"Unknown team: {abv}  —  try: curl mlbsched.run/ical\n", status_code=404)
+    return Response(
+        content=body,
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": f'inline; filename="{abv}.ics"',
+            # Identical for all viewers (UTC times); safe to share at the edge.
+            "Cache-Control": "public, max-age=1800",
+            "Vary": "Accept-Encoding",
+        },
+    )
 
 
 @app.get("/wp/{team}")
