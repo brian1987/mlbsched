@@ -353,14 +353,17 @@ _season_cache: dict[tuple[int, int], list[dict]] = {}
 
 
 def _final_games_for_season(team_id: int, year: int) -> list[dict]:
-    """Completed regular-season games for a team in a season (cached for past years)."""
+    """Completed regular-season + postseason games for a team in a season (cached
+    for past years). gameType R,F,D,L,W = regular, wild card, division series,
+    LCS, World Series — deliberately excludes spring (S), which the API also
+    reports as Final."""
     key = (team_id, year)
     if year < today_et().year and key in _season_cache:
         return _season_cache[key]
     try:
         resp = requests.get(
             f"{MLB_API}/schedule",
-            params={"sportId": 1, "teamId": team_id, "season": year, "gameType": "R"},
+            params={"sportId": 1, "teamId": team_id, "season": year, "gameType": "R,F,D,L,W"},
             timeout=10,
         )
         resp.raise_for_status()
@@ -379,9 +382,9 @@ def _final_games_for_season(team_id: int, year: int) -> list[dict]:
 
 
 def random_recap_date(team_abv: str) -> str | None:
-    """Pick the date of a random completed regular-season game from the team's
-    history. Returns 'YYYY-MM-DD' (the game's official date) or None if no game
-    could be found (unknown team or repeated API failures)."""
+    """Pick the date of a random completed game — regular season or postseason —
+    from the team's history. Returns 'YYYY-MM-DD' (the game's official date) or
+    None if no game could be found (unknown team or repeated API failures)."""
     abv = team_abv.upper()
     if abv not in TEAMS:
         return None
