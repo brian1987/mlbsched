@@ -867,6 +867,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/leaders/<STAT>       Top 25 in one stat (e.g. ops, era, whip, hr, sb)
     curl mlbsched.run/broadcasts           TV broadcasts for today's games
     curl mlbsched.run/broadcasts/<TEAM>    TV broadcasts for one team today
+    curl mlbsched.run/ical                 Subscribe to a team's schedule (calendar feed)
+    curl mlbsched.run/ical/<TEAM>.ics      iCal feed of a team's full season
     curl mlbsched.run/teams                All team abbreviations
     curl mlbsched.run/random               Random MLB mascot ASCII art
     curl mlbsched.run/today                Today's schedule only (minimal scoreboard)
