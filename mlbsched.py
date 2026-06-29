@@ -220,10 +220,14 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
         return
 
     stats_by_id: dict[int, dict] = {}
+    hand_by_id: dict[int, str] = {}
     for p in people:
         pid = p.get("id")
         if not pid:
             continue
+        hand = (p.get("pitchHand") or {}).get("code")
+        if hand:
+            hand_by_id[pid] = hand
         for block in p.get("stats", []):
             for split in block.get("splits", []):
                 s = split.get("stat", {})
@@ -231,6 +235,7 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
                     "wins":   s.get("wins"),
                     "losses": s.get("losses"),
                     "era":    s.get("era"),
+                    "whip":   s.get("whip"),
                 }
                 break
             if pid in stats_by_id:
@@ -240,6 +245,9 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
         st = stats_by_id.get(pp["id"])
         if st:
             pp["_record"] = st
+        hand = hand_by_id.get(pp["id"])
+        if hand:
+            pp["_hand"] = hand
 
 
 def fetch_standings() -> dict:
@@ -862,6 +870,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/h2h/<TEAM>/<TEAM>    Season head-to-head series
     curl mlbsched.run/player/<NAME>        Player season stats + last game (e.g. lindor)
     curl mlbsched.run/lineup/<TEAM>        Today's batting order for a team's game
+    curl mlbsched.run/pitchers             Today's probable starting-pitcher matchups
     curl mlbsched.run/streaks              Teams on hot or cold runs (4+ games, ?min=N)
     curl mlbsched.run/leaders              Top batting + pitching leaders (HR, AVG, OPS, W, ERA, K)
     curl mlbsched.run/leaders/<STAT>       Top 25 in one stat (e.g. ops, era, whip, hr, sb)

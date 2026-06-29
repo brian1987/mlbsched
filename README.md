@@ -44,6 +44,9 @@ curl mlbsched.run/wildcard
 # Head-to-head season series between two teams
 curl mlbsched.run/h2h/NYM/PHI
 
+# Today's probable starting-pitcher matchups (season W-L, ERA, WHIP)
+curl mlbsched.run/pitchers
+
 # Today's batting order for a team's game (~3 hrs before first pitch)
 curl mlbsched.run/lineup/NYM
 
@@ -124,6 +127,7 @@ Every endpoint above has a JSON variant under `/api/`:
 curl mlbsched.run/api/NYM
 curl mlbsched.run/api/wildcard
 curl mlbsched.run/api/h2h/NYM/PHI
+curl mlbsched.run/api/pitchers
 curl mlbsched.run/api/lineup/NYM
 curl mlbsched.run/api/player/judge
 curl mlbsched.run/api/leaders
