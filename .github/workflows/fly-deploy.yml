@@ -13,9 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      # --depot=false uses Fly's legacy remote builder; the newer depot builder
-      # had a sustained "Waiting for depot builder... context deadline exceeded"
-      # outage that broke deploys (2026-06-29).
-      - run: flyctl deploy --remote-only --depot=false
+      # NOTE: the CI FLY_API_TOKEN is a scoped deploy token authorized for the
+      # depot builder only. Do NOT switch to --depot=false (Fly's legacy remote
+      # builder) without first re-issuing a broader-scoped token — it fails with
+      # "remote builder heartbeat: unauthorized". If depot is down, deploy from a
+      # full-auth machine: `fly deploy --depot=false --remote-only`.
+      - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
