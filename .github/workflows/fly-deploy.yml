@@ -13,6 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
+      # --depot=false uses Fly's legacy remote builder; the newer depot builder
+      # had a sustained "Waiting for depot builder... context deadline exceeded"
+      # outage that broke deploys (2026-06-29).
+      - run: flyctl deploy --remote-only --depot=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
