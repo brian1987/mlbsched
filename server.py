@@ -30,6 +30,7 @@ import birthdays
 import wp
 import ical
 import pitchers
+import about
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -590,6 +591,11 @@ def api_onthisday():
     return JSONResponse(onthisday.build_onthisday_json())
 
 
+@app.get("/api/about")
+def api_about():
+    return JSONResponse(about.build_about_json())
+
+
 @app.get("/api/pitchers")
 def api_pitchers(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -987,6 +993,11 @@ def today_route(request: Request):
 @app.get("/onthisday")
 def onthisday_route(request: Request):
     return respond(request, onthisday.render_onthisday())
+
+
+@app.get("/about")
+def about_route(request: Request):
+    return respond(request, about.render_about())
 
 
 @app.get("/pitchers")

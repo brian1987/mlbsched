@@ -879,6 +879,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/ical                 Subscribe to a team's schedule (calendar feed)
     curl mlbsched.run/ical/<TEAM>.ics      iCal feed of a team's full season
     curl mlbsched.run/teams                All team abbreviations
+    curl mlbsched.run/about                What this is, how it's built, who made it
     curl mlbsched.run/random               Random MLB mascot ASCII art
     curl mlbsched.run/today                Today's schedule only (minimal scoreboard)
     curl mlbsched.run/onthisday            On this date in MLB history (10/25/50 years ago)
@@ -909,6 +910,11 @@ def main():
 
     if first in ("-h", "--help", "help"):
         render_help(out=sys.stdout)
+        return
+
+    if first == "about":
+        import about
+        about.render_about(out=sys.stdout)
         return
 
     if first == "teams":
