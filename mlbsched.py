@@ -864,6 +864,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/distance             Today's games sorted by distance from you
     curl mlbsched.run/odds                 Today's odds — best NY sportsbook price per market
     curl mlbsched.run/odds/<TEAM>          Odds for one team's game today
+    curl mlbsched.run/bestbets             Pricing edges vs the multi-book no-vig consensus
+    curl mlbsched.run/bestbets/<TEAM>      Edges for one team's game today
     curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings (W-L, PCT, GB, L10, run diff)
     curl mlbsched.run/wildcard             Wild Card race per league
@@ -884,6 +886,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run/today                Today's schedule only (minimal scoreboard)
     curl mlbsched.run/onthisday            On this date in MLB history (10/25/50 years ago)
     curl mlbsched.run/birthdays            Active players born on today's date
+    curl mlbsched.run/birthdays/all        All-time legends born on today's date
     curl mlbsched.run/wp/<TEAM>            Win-probability sparkline for the team's last completed game
     curl mlbsched.run/wp/<TEAM>/<DATE>     Win-probability sparkline for a specific date
 
