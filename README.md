@@ -149,6 +149,24 @@ curl mlbsched.run/api/wp/NYM
 curl mlbsched.run/api/wp/NYM/2025-10-04
 ```
 
+### Status codes
+
+Errors carry a real status code on both the text and JSON routes, so `curl -f` and
+`resp.raise_for_status()` do the right thing:
+
+| Code | Meaning |
+|---|---|
+| `200` | OK |
+| `400` | Well-formed but nonsensical (`/h2h/NYM/NYM`) |
+| `404` | Unknown team, stat, player, or date (`/lineup/ZZZ`, `/leaders/bogus`) |
+| `422` | Bad query parameter (`/streaks?min=abc`) |
+| `503` | An upstream data source is down — retry after 30s |
+
+```bash
+# Fails loudly instead of piping an error page into your script
+curl -fsS mlbsched.run/box/NYM || echo "no game"
+```
+
 ## Team Abbreviations
 
 | | | | | | |

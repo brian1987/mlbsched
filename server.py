@@ -7,6 +7,7 @@ import html as _html
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -84,6 +85,21 @@ async def upstream_unavailable(request: Request, exc: _requests.RequestException
     if is_curl(request):
         return PlainTextResponse(msg, status_code=503, headers=headers)
     return HTMLResponse(html_wrap(f"\n  {msg}"), status_code=503, headers=headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def bad_query_param(request: Request, exc: RequestValidationError):
+    """A bad query param (?min=abc) otherwise dumps FastAPI's JSON validation blob into
+    a terminal. Keep the 422, swap the body for the plain text the rest of the site speaks.
+    /api/ callers still get JSON — that's the contract they signed up for."""
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": exc.errors()}, status_code=422)
+    bad = ", ".join(str(e["loc"][-1]) for e in exc.errors()) or "query parameters"
+    msg = (
+        f"\n  {sched.RED}Invalid value for: {bad}{sched.RESET}\n"
+        f"  {sched.GRAY}Try: curl mlbsched.run/help{sched.RESET}\n"
+    )
+    return respond(request, msg, status_code=422)
 
 
 def is_curl(request: Request) -> bool:
@@ -230,6 +246,16 @@ def respond(request: Request, content: str, refresh_secs: int | None = None, sta
     if is_curl(request):
         return PlainTextResponse(content, status_code=status_code)
     return HTMLResponse(html_wrap(content, refresh_secs), status_code=status_code)
+
+
+def team_status(team: str) -> int:
+    """404 when a team abbreviation isn't real, else 200.
+
+    Every renderer already checks `abv.upper() not in TEAMS` and prints its own
+    "Unknown team" body; this mirrors that check at the route so the status line
+    agrees with the body. Scripts (`curl -f`, `set -e` pipelines) and crawlers only
+    see the status, and the /api/ routes have always reported these as 404."""
+    return 200 if team.upper() in sched.TEAMS else 404
 
 
 # ── IP geolocation ────────────────────────────────────────────────────────────
@@ -498,7 +524,11 @@ def api_lineup(team: str):
 
 @app.get("/api/player/{name}")
 def api_player(name: str):
-    return JSONResponse(player.build_player_json(name))
+    data = player.build_player_json(name)
+    # A hit is either a resolved player or a disambiguation list; neither means a miss.
+    # Shape is unchanged (matches: [], player: null) — only the status differs.
+    missed = data.get("player") is None and not data.get("matches")
+    return JSONResponse(data, status_code=404 if missed else 200)
 
 
 @app.get("/api/h2h/{team_a}/{team_b}")
@@ -630,7 +660,8 @@ def api_broadcasts_team(request: Request, team: str):
 @app.get("/api/wp/{team}")
 def api_wp(team: str):
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return JSONResponse(wp.build_wp_json(team, d))
+    data = wp.build_wp_json(team, d)
+    return JSONResponse(data, status_code=404 if "error" in data else 200)
 
 
 @app.get("/api/wp/{team}/{date_str}")
@@ -639,7 +670,8 @@ def api_wp_date(team: str, date_str: str):
         d = sched.parse_date(date_str)
     except ValueError:
         return JSONResponse({"error": f"Invalid date: {date_str}"}, status_code=400)
-    return JSONResponse(wp.build_wp_json(team, d.strftime("%Y-%m-%d")))
+    data = wp.build_wp_json(team, d.strftime("%Y-%m-%d"))
+    return JSONResponse(data, status_code=404 if "error" in data else 200)
 
 
 @app.get("/api/{team}")
@@ -921,7 +953,7 @@ def odds_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     abv = team.upper()
     if abv not in sched.TEAMS:
-        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
+        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n", status_code=404)
     return respond(request, odds.render_odds(team_abv=abv, tz=tz))
 
 
@@ -934,18 +966,28 @@ def streaks_today(request: Request, min: int = streaks.DEFAULT_MIN):
 @app.get("/lineup/{team}")
 def lineup_route(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
-    return respond(request, lineup.render_lineup(team, tz=tz))
+    return respond(request, lineup.render_lineup(team, tz=tz), status_code=team_status(team))
 
 
 @app.get("/player/{name}")
 def player_route(request: Request, name: str):
-    return respond(request, player.render_player(name))
+    # Nobody matching the fragment is a miss, not an empty result set — 404 it.
+    # A one-of-many match still renders the disambiguation list at 200.
+    matches, _ = player.find_player(name, today_et().year)
+    return respond(request, player.render_player(name), status_code=200 if matches else 404)
 
 
 @app.get("/h2h/{team_a}/{team_b}")
 def h2h_route(request: Request, team_a: str, team_b: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
-    return respond(request, h2h.render_h2h(team_a, team_b, tz=tz))
+    a, b = team_a.upper(), team_b.upper()
+    if a not in sched.TEAMS or b not in sched.TEAMS:
+        code = 404
+    elif a == b:
+        code = 400  # both teams exist; the pairing is the bad part
+    else:
+        code = 200
+    return respond(request, h2h.render_h2h(team_a, team_b, tz=tz), status_code=code)
 
 
 @app.get("/wildcard")
@@ -961,7 +1003,9 @@ def leaders_today(request: Request):
 @app.get("/leaders/{stat}")
 def leaders_stat(request: Request, stat: str, limit: int = 25):
     limit = max(1, min(limit, 50))
-    return respond(request, leaders.render_leaders_one(stat.lower(), count=limit))
+    alias = stat.lower()
+    body = leaders.render_leaders_one(alias, count=limit)
+    return respond(request, body, status_code=200 if alias in leaders.ALL_STATS else 404)
 
 
 @app.get("/bestbets")
@@ -975,7 +1019,7 @@ def bestbets_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     abv = team.upper()
     if abv not in sched.TEAMS:
-        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n")
+        return respond(request, f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n", status_code=404)
     return respond(request, bestbets.render_bestbets(team_abv=abv, tz=tz))
 
 
@@ -1025,7 +1069,7 @@ def broadcasts_today(request: Request):
 @app.get("/broadcasts/{team}")
 def broadcasts_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
-    return respond(request, broadcasts.render_broadcasts(team_abv=team, tz=tz))
+    return respond(request, broadcasts.render_broadcasts(team_abv=team, tz=tz), status_code=team_status(team))
 
 
 @app.get("/ical")
@@ -1058,7 +1102,7 @@ def ical_feed(filename: str):
 def wp_route(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, wp.render_wp(team, d, tz=tz))
+    return respond(request, wp.render_wp(team, d, tz=tz), status_code=team_status(team))
 
 
 @app.get("/wp/{team}/{date_str}")
@@ -1067,8 +1111,8 @@ def wp_route_date(request: Request, team: str, date_str: str):
     try:
         d = sched.parse_date(date_str)
     except ValueError:
-        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n")
-    return respond(request, wp.render_wp(team, d.strftime("%Y-%m-%d"), tz=tz))
+        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n", status_code=404)
+    return respond(request, wp.render_wp(team, d.strftime("%Y-%m-%d"), tz=tz), status_code=team_status(team))
 
 
 @app.get("/{segment}")
@@ -1094,19 +1138,25 @@ def one_segment(request: Request, segment: str):
 def yesterday_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game), status_code=team_status(team))
 
 
 @app.get("/box/{team}")
 def box_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
+    return respond(request, sched.render_team_recap(d, team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game), status_code=team_status(team))
 
 
 @app.get("/box/{team}/{date_str}")
 def box_team_date(request: Request, team: str, date_str: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    if team.upper() not in sched.TEAMS:
+        msg = (
+            f"\n  {sched.RED}Unknown team: {team.upper()}{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
     if date_str.lower() == "random":
         d_str = sched.random_recap_date(team.upper())
         if not d_str:
@@ -1119,7 +1169,7 @@ def box_team_date(request: Request, team: str, date_str: str):
     try:
         d = sched.parse_date(date_str)
     except ValueError:
-        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n")
+        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n", status_code=404)
     return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
 
 
@@ -1127,7 +1177,7 @@ def box_team_date(request: Request, team: str, date_str: str):
 def tomorrow_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     d = (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, sched.render_schedule(d, team.upper(), tz=tz))
+    return respond(request, sched.render_schedule(d, team.upper(), tz=tz), status_code=team_status(team))
 
 
 @app.get("/{team}/{date_str}")
