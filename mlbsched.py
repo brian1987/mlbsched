@@ -526,9 +526,9 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
     if abstract == "Preview" and not is_no_play:
         away_pp = game["teams"]["away"].get("probablePitcher")
         home_pp = game["teams"]["home"].get("probablePitcher")
-        if away_pp and home_pp:
-            a = _fmt_pitcher(away_pp)
-            h = _fmt_pitcher(home_pp)
+        if away_pp or home_pp:
+            a = _fmt_pitcher(away_pp or {})
+            h = _fmt_pitcher(home_pp or {})
             print(f"         {GRAY}{a}  vs  {h}{RESET}", file=out)
 
 
