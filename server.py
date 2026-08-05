@@ -543,6 +543,16 @@ def api_h2h(team_a: str, team_b: str):
     return JSONResponse(h2h.build_h2h_json(a, b))
 
 
+@app.get("/api/standings")
+def api_standings():
+    return JSONResponse({"date": today_et().isoformat(), **sched.build_standings_json()})
+
+
+@app.get("/api/teams")
+def api_teams():
+    return JSONResponse(sched.build_team_list_json())
+
+
 @app.get("/api/wildcard")
 def api_wildcard():
     return JSONResponse({"date": today_et().isoformat(), **wildcard.get_wildcard_json()})

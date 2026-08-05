@@ -35,7 +35,7 @@ curl mlbsched.run/box/NYM
 curl mlbsched.run/box/NYM/2026-04-20
 curl mlbsched.run/box/NYM/random
 
-# Division standings (W-L, PCT, GB, last-10, run differential)
+# Division standings (W-L, PCT, GB, last-10, run differential, magic number)
 curl mlbsched.run/standings
 
 # Wild Card race per league (3 division leaders + WC1–3 above the cutoff)
@@ -119,12 +119,29 @@ curl -H "Authorization: Bearer $MLBSCHED_METRICS_TOKEN" mlbsched.run/metrics?day
 **Hitting:** `avg`, `obp`, `slg`, `ops`, `hr`, `rbi`, `r`, `h`, `2b`, `3b`, `sb`, `bb`, `so`, `tb`
 **Pitching:** `era`, `w`, `sv`, `k`, `whip`, `ip`, `kbb`, `hld`, `oba`
 
+## Magic and elimination numbers
+
+From midseason on, `/standings` and `/wildcard` carry the pennant race:
+
+| Column | Meaning |
+|---|---|
+| `M#` | Magic number — wins by this team plus losses by its closest chaser that clinch the division |
+| `E#` | Elimination number — games until the team is eliminated (`/wildcard` shows the wild-card version) |
+| `*` | Clinched a playoff berth |
+
+A `-` means the number doesn't apply — a trailing team has no magic number, a
+division leader has no elimination number. Both come straight from the MLB Stats
+API, and the columns are omitted entirely in the early season and the offseason,
+when MLB isn't publishing them.
+
 ## JSON API
 
 Every endpoint above has a JSON variant under `/api/`:
 
 ```bash
 curl mlbsched.run/api/NYM
+curl mlbsched.run/api/standings
+curl mlbsched.run/api/teams
 curl mlbsched.run/api/wildcard
 curl mlbsched.run/api/h2h/NYM/PHI
 curl mlbsched.run/api/pitchers
