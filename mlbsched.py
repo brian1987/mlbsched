@@ -706,6 +706,28 @@ def _run_diff(t: dict) -> str:
     return f"+{rd}" if rd > 0 else str(rd)
 
 
+LEAGUE_NAMES = {103: "American League", 104: "National League"}
+
+
+def race_number(v) -> str:
+    """Magic/elimination numbers: MLB omits the key entirely when it doesn't apply
+    (a trailing team has no magicNumber) and sends '-' when it applies but is moot."""
+    if v in (None, "", "-"):
+        return "-"
+    return str(v)
+
+
+def _has_race_numbers(data: dict) -> bool:
+    """True once MLB publishes magic/elimination numbers. They're absent in the
+    early season and the offseason, when the columns would be all dashes."""
+    return any(
+        race_number(t.get("magicNumber")) != "-"
+        or race_number(t.get("eliminationNumber")) != "-"
+        for record in data.get("records", [])
+        for t in record.get("teamRecords", [])
+    )
+
+
 def render_standings(out=None) -> str:
     buf = io.StringIO()
     _out = out or buf
@@ -714,15 +736,20 @@ def render_standings(out=None) -> str:
         print(s, file=_out)
 
     data = fetch_standings()
+    show_race    = _has_race_numbers(data)
+    any_clinched = False
 
     p()
     p(f"  {BOLD}{CYAN}MLB Standings{RESET}")
-    p(f"  {GRAY}{'─' * 60}{RESET}")
+    p(f"  {GRAY}{'─' * (66 if show_race else 60)}{RESET}")
 
     for record in data.get("records", []):
         div = record.get("division", {}).get("name", "Unknown Division")
         p(f"\n  {BOLD}{YELLOW}{div}{RESET}")
-        p(f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5} {'L10':>5} {'RDIF':>5}{RESET}")
+        header = f"  {GRAY}{'Team':<22} {'W':>3} {'L':>3} {'PCT':>5} {'GB':>5} {'L10':>5} {'RDIF':>5}"
+        if show_race:
+            header += f" {'M#':>4} {'E#':>4}"
+        p(header + RESET)
 
         teams = sorted(record.get("teamRecords", []), key=lambda x: -float(x.get("winningPercentage", 0)))
         for i, t in enumerate(teams):
@@ -737,7 +764,19 @@ def render_standings(out=None) -> str:
             rdif    = _run_diff(t)
             color   = team_color(abv)
             marker  = f"{BOLD}{color}" if i == 0 else RESET
-            p(f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5} {l10:>5} {rdif:>5}")
+            row = f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5} {l10:>5} {rdif:>5}"
+            if show_race:
+                row += f" {race_number(t.get('magicNumber')):>4} {race_number(t.get('eliminationNumber')):>4}"
+            if t.get("clinched"):
+                any_clinched = True
+                row += f" {BOLD}{GREEN}*{RESET}"
+            p(row)
+
+    if show_race:
+        p()
+        p(f"  {GRAY}M# = magic number · E# = elimination number{RESET}")
+        if any_clinched:
+            p(f"  {GRAY}*  = clinched a playoff berth{RESET}")
 
     p()
     return buf.getvalue()
@@ -757,6 +796,49 @@ def render_team_list(out=None) -> str:
         p(f"  {row}")
     p()
     return buf.getvalue()
+
+
+def build_standings_json() -> dict:
+    data = fetch_standings()
+    divisions = []
+    for record in data.get("records", []):
+        league_id = (record.get("league") or {}).get("id")
+        teams = sorted(
+            record.get("teamRecords", []),
+            key=lambda x: -float(x.get("winningPercentage", 0)),
+        )
+        rows = []
+        for t in teams:
+            abv = abv_from_id(t["team"]["id"])
+            rows.append({
+                "team":            abv,
+                "name":            TEAMS.get(abv, (None, t["team"]["name"], None))[1],
+                "wins":            t.get("wins", 0),
+                "losses":          t.get("losses", 0),
+                "pct":             t.get("winningPercentage", ".000"),
+                "gb":              t.get("gamesBack", "-"),
+                "l10":             _last_ten(t),
+                "run_diff":        t.get("runDifferential"),
+                "division_leader": t.get("divisionLeader", False),
+                "magic":           race_number(t.get("magicNumber")),
+                "elim":            race_number(t.get("eliminationNumber")),
+                "clinched":        t.get("clinched", False),
+            })
+        divisions.append({
+            "division": (record.get("division") or {}).get("name", "Unknown Division"),
+            "league":   LEAGUE_NAMES.get(league_id),
+            "teams":    rows,
+        })
+    return {"divisions": divisions}
+
+
+def build_team_list_json() -> dict:
+    return {
+        "teams": [
+            {"team": abv, "id": TEAMS[abv][0], "name": TEAMS[abv][1]}
+            for abv in sorted(TEAMS)
+        ]
+    }
 
 
 def render_live(out=None, tz: ZoneInfo | None = None) -> str:

@@ -3,8 +3,8 @@
 import io
 
 from mlbsched import (
-    BOLD, DIM, RESET, YELLOW, CYAN, WHITE, GRAY,
-    TEAMS, abv_from_id, team_color, fetch_standings,
+    BOLD, DIM, RESET, YELLOW, CYAN, WHITE, GRAY, GREEN,
+    TEAMS, abv_from_id, team_color, fetch_standings, race_number,
 )
 
 LEAGUES = {
@@ -83,15 +83,19 @@ def _wc_row(rank: int, t: dict, in_line: bool, out) -> None:
     record = f"{t['wins']}-{t['losses']}"
     pct    = t["pct"]
     wc_gb  = t.get("wc_gb") or "-"
+    wc_e   = race_number(t.get("wc_elim"))
     abv_marker  = f"{BOLD}{color}" if in_line else f"{color}"
     name_marker = f"{BOLD}{WHITE}" if in_line else RESET
+    clinch      = f" {BOLD}{GREEN}*{RESET}" if t.get("clinched") else ""
     print(
         f"   {GRAY}{rank:>2}{RESET}  "
         f"{abv_marker}{abv:<3}{RESET}  "
         f"{name_marker}{name:<22}{RESET}  "
         f"{record:>7}  "
         f"{pct:>5}  "
-        f"{wc_gb:>5}",
+        f"{wc_gb:>5}  "
+        f"{wc_e:>4}"
+        f"{clinch}",
         file=out,
     )
 
@@ -107,7 +111,7 @@ def render_wildcard(out=None) -> str:
 
     p()
     p(f"  {BOLD}{CYAN}Wild Card Race{RESET}")
-    p(f"  {GRAY}{'─' * 60}{RESET}")
+    p(f"  {GRAY}{'─' * 64}{RESET}")
 
     for league_id in (103, 104):
         race = races.get(league_id) or {}
@@ -120,26 +124,32 @@ def render_wildcard(out=None) -> str:
             color   = team_color(abv)
             record  = f"{t['wins']}-{t['losses']}"
             div     = _short_division(t["division"])
+            magic   = race_number(t.get("magic"))
+            clinch  = f" {BOLD}{GREEN}*{RESET}" if t.get("clinched") else ""
             print(
                 f"       {BOLD}{color}{abv:<3}{RESET}  "
                 f"{GRAY}{div:<10}{RESET}  "
-                f"{record:>7}  {t['pct']:>5}",
+                f"{record:>7}  {t['pct']:>5}  "
+                f"{GRAY}M#{RESET} {magic:>3}"
+                f"{clinch}",
                 file=_out,
             )
 
         # Wild Card race
         p(f"\n  {GRAY}Wild Card{RESET}")
-        p(f"   {GRAY}{'#':>2}  {'':<3}  {'Team':<22}  {'Record':>7}  {'PCT':>5}  {'GB':>5}{RESET}")
+        p(f"   {GRAY}{'#':>2}  {'':<3}  {'Team':<22}  {'Record':>7}  {'PCT':>5}  {'GB':>5}  {'E#':>4}{RESET}")
         wc = race.get("wildcard", [])
         for i, t in enumerate(wc, start=1):
             _wc_row(i, t, in_line=True, out=_out)
 
         chasing = race.get("chasing", [])
         if chasing and wc:
-            p(f"   {GRAY}{'─' * 56}{RESET}")
+            p(f"   {GRAY}{'─' * 62}{RESET}")
         for i, t in enumerate(chasing, start=len(wc) + 1):
             _wc_row(i, t, in_line=False, out=_out)
 
+    p()
+    p(f"  {GRAY}M# = division magic number · E# = wild-card elimination number{RESET}")
     p()
     return buf.getvalue()
 
