@@ -136,10 +136,15 @@ when MLB isn't publishing them.
 
 ## JSON API
 
-Every endpoint above has a JSON variant under `/api/`:
+Every data endpoint above has a JSON variant under `/api/`. The date-scoped schedule
+views (`/yesterday`, `/tomorrow`, `/NYM/2026-04-20`) are the exception — for a specific
+date, use `/api/box/<TEAM>/<DATE>`:
 
 ```bash
 curl mlbsched.run/api/NYM
+curl mlbsched.run/api/box/NYM
+curl mlbsched.run/api/box/NYM/2026-04-20
+curl mlbsched.run/api/box/NYM/random
 curl mlbsched.run/api/standings
 curl mlbsched.run/api/teams
 curl mlbsched.run/api/wildcard
