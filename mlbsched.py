@@ -841,6 +841,80 @@ def build_team_list_json() -> dict:
     }
 
 
+def build_box_json(team_abv: str, date_str: str) -> dict:
+    """JSON counterpart to render_team_recap/render_boxscore: line score for a team's games on a date.
+
+    Uses only the already-hydrated `linescore` from fetch_schedule, so this costs no
+    extra upstream calls. Win probability is deliberately left to /api/wp — folding it
+    in here would mean a fetch_wp() per game."""
+    abv = team_abv.upper()
+    if abv not in TEAMS:
+        return {"error": f"Unknown team: {abv}"}
+
+    team_id = TEAMS[abv][0]
+    data    = fetch_schedule(date_str, team_id)
+
+    def side_totals(side: dict) -> dict:
+        # No defaults: a scheduled game reports no runs at all, which is not the same as 0.
+        return {
+            "runs":   side.get("runs"),
+            "hits":   side.get("hits"),
+            "errors": side.get("errors"),
+        }
+
+    games_out: list[dict] = []
+    for block in data.get("dates", []):
+        for game in block.get("games", []):
+            away_abv = abv_from_id(game["teams"]["away"]["team"]["id"])
+            home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+            status   = game["status"]["abstractGameState"]
+
+            ls      = game.get("linescore", {})
+            totals  = ls.get("teams", {})
+            away_t  = side_totals(totals.get("away", {}))
+            home_t  = side_totals(totals.get("home", {}))
+
+            innings = [
+                {
+                    "num":  inn.get("num"),
+                    "away": (inn.get("away") or {}).get("runs"),
+                    "home": (inn.get("home") or {}).get("runs"),
+                }
+                for inn in ls.get("innings", [])
+            ]
+
+            # Only a Final game has a winner; a tie or suspended game reports none.
+            winner = None
+            if status == "Final" and away_t["runs"] is not None and home_t["runs"] is not None:
+                if away_t["runs"] > home_t["runs"]:
+                    winner = away_abv
+                elif home_t["runs"] > away_t["runs"]:
+                    winner = home_abv
+
+            loc = game_location(game)
+
+            games_out.append({
+                "game_pk":    game.get("gamePk"),
+                "away":       away_abv,
+                "away_name":  TEAMS.get(away_abv, (None, away_abv, None))[1],
+                "home":       home_abv,
+                "home_name":  TEAMS.get(home_abv, (None, home_abv, None))[1],
+                "away_score": game["teams"]["away"].get("score"),
+                "home_score": game["teams"]["home"].get("score"),
+                "status":     status,
+                "detail":     game["status"]["detailedState"],
+                "reason":     game["status"].get("reason") or None,
+                # UTC as MLB reports it — no viewer-timezone personalization, unlike the HTML routes.
+                "game_date":  game.get("gameDate") or None,
+                "venue":      loc[0] if loc else None,
+                "innings":    innings,
+                "totals":     {"away": away_t, "home": home_t},
+                "winner":     winner,
+            })
+
+    return {"team": abv, "date": date_str, "games": games_out}
+
+
 def render_live(out=None, tz: ZoneInfo | None = None) -> str:
     buf = io.StringIO()
     _out = out or buf

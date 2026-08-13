@@ -684,6 +684,30 @@ def api_wp_date(team: str, date_str: str):
     return JSONResponse(data, status_code=404 if "error" in data else 200)
 
 
+@app.get("/api/box/{team}")
+def api_box(team: str):
+    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    data = sched.build_box_json(team, d)
+    return JSONResponse(data, status_code=404 if "error" in data else 200)
+
+
+@app.get("/api/box/{team}/{date_str}")
+def api_box_date(team: str, date_str: str):
+    if team.upper() not in sched.TEAMS:
+        return JSONResponse({"error": f"Unknown team: {team.upper()}"}, status_code=404)
+    if date_str.lower() == "random":
+        d_str = sched.random_recap_date(team.upper())
+        if not d_str:
+            return JSONResponse({"error": f"Couldn't find a game for {team.upper()}"}, status_code=404)
+        return JSONResponse(sched.build_box_json(team, d_str))
+    try:
+        d = sched.parse_date(date_str)
+    except ValueError:
+        return JSONResponse({"error": f"Invalid date: {date_str}"}, status_code=400)
+    data = sched.build_box_json(team, d.strftime("%Y-%m-%d"))
+    return JSONResponse(data, status_code=404 if "error" in data else 200)
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     abv = team.upper()
