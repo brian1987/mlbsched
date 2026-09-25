@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from mlbsched import MLB_API, TEAMS, today_et
+from mlbsched import MLB_API, TEAMS, schedule_season
 
 # Baseball has no fixed end; block out a sensible window so the event reads well.
 _GAME_DURATION = timedelta(hours=3)
@@ -155,7 +155,7 @@ def render_ical(team_abv: str) -> str | None:
     if abv not in TEAMS:
         return None
     team_id, full_name, _color = TEAMS[abv]
-    year = today_et().year
+    year = schedule_season()
     try:
         games = _fetch_season_games(team_id, year)
     except requests.RequestException:
