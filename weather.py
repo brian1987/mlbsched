@@ -11,7 +11,7 @@ import db
 from mlbsched import (
     BOLD, DIM, RESET, RED, GREEN, YELLOW, BLUE, CYAN, WHITE, GRAY,
     TEAMS, team_color, fmt_team, today_et, ET,
-    fmt_game_time, abv_from_id, game_location,
+    game_time_label, abv_from_id, game_location,
 )
 
 CACHE_TTL_SECONDS = 1800  # 30 minutes
@@ -162,7 +162,7 @@ def render_weather(out=None) -> str:
         home_id  = game["teams"]["home"]["team"]["id"]
         away_abv = abv_from_id(away_id)
         home_abv = abv_from_id(home_id)
-        gt       = fmt_game_time(game.get("gameDate", ""))
+        gt       = game_time_label(game)
         loc      = stadium_location(game)
         stadium  = loc[0] if loc else "Unknown"
 

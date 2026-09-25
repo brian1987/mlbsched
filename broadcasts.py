@@ -10,7 +10,7 @@ import requests
 import mlbsched as sched
 from mlbsched import (
     BOLD, DIM, RESET, RED, GREEN, YELLOW, CYAN, WHITE, GRAY,
-    TEAMS, MLB_API, abv_from_id, fmt_team, fmt_game_time, today_et,
+    TEAMS, MLB_API, abv_from_id, fmt_team, fmt_game_time, game_time_label, today_et,
 )
 
 # Strip sponsor suffixes like " Presented by Progressive" so display stays tight.
@@ -111,7 +111,7 @@ def render_broadcasts(team_abv: str | None = None, out=None, tz: ZoneInfo | None
         home_id = game["teams"]["home"]["team"]["id"]
         away_abv = abv_from_id(away_id)
         home_abv = abv_from_id(home_id)
-        game_time = fmt_game_time(game.get("gameDate", ""), tz)
+        game_time = game_time_label(game, tz)
 
         header = f"  {fmt_team(away_abv)} {DIM}@{RESET} {fmt_team(home_abv)}"
         if game_time:
@@ -183,7 +183,8 @@ def build_broadcasts_json(team_abv: str | None = None, tz: ZoneInfo | None = Non
             games_out.append({
                 "away":      abv_from_id(away_id),
                 "home":      abv_from_id(home_id),
-                "game_time": fmt_game_time(game.get("gameDate", ""), tz) or None,
+                "game_time": None if (game.get("status") or {}).get("startTimeTBD") else (fmt_game_time(game.get("gameDate", ""), tz) or None),
+                "start_time_tbd": bool((game.get("status") or {}).get("startTimeTBD")),
                 "national":  [_broadcast_json(n) for n in nationals],
                 "away_feed": _broadcast_json(away) if away else None,
                 "home_feed": _broadcast_json(home) if home else None,
