@@ -27,6 +27,9 @@ curl mlbsched.run/tomorrow/NYM
 curl mlbsched.run/yesterday
 curl mlbsched.run/yesterday/NYM
 
+# A team's next game (today's if it hasn't finished), with a countdown to first pitch
+curl mlbsched.run/NYM/next
+
 # Live scores (auto-refresh in browser)
 curl mlbsched.run/live
 
@@ -150,12 +153,17 @@ a game whose first pitch hasn't been set prints `TBD` instead of a time.
 
 ## JSON API
 
-Every data endpoint above has a JSON variant under `/api/`. The date-scoped schedule
-views (`/yesterday`, `/tomorrow`, `/NYM/2026-04-20`) are the exception — for a specific
-date, use `/api/box/<TEAM>/<DATE>`:
+Every data endpoint above has a JSON variant under `/api/`:
 
 ```bash
 curl mlbsched.run/api/NYM
+curl mlbsched.run/api/NYM/next
+curl mlbsched.run/api/NYM/2026-04-20
+curl mlbsched.run/api/2026-04-20
+curl mlbsched.run/api/yesterday
+curl mlbsched.run/api/yesterday/NYM
+curl mlbsched.run/api/tomorrow
+curl mlbsched.run/api/tomorrow/NYM
 curl mlbsched.run/api/box/NYM
 curl mlbsched.run/api/box/NYM/2026-04-20
 curl mlbsched.run/api/box/NYM/random

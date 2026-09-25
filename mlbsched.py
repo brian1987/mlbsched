@@ -250,6 +250,133 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
             pp["_hand"] = hand
 
 
+# ── Next game ─────────────────────────────────────────────────────────────────
+_NEXT_WINDOW_DAYS = 45          # covers the All-Star break and the offseason edge
+_NEXT_TTL_SECONDS = 60
+_next_cache: dict[int, tuple[float, dict | None]] = {}   # team_id -> (fetched_at, game)
+
+
+def _is_no_play(game: dict) -> bool:
+    s = (game.get("status", {}).get("detailedState") or "").lower()
+    return "postponed" in s or "cancel" in s or "suspended" in s
+
+
+def fetch_next_game(team_id: int) -> dict | None:
+    """The team's next game that isn't over: today's if it's still to come or in
+    progress, otherwise the first upcoming one within the window. None when
+    nothing is scheduled (offseason, or eliminated with the season done)."""
+    now = time.monotonic()
+    cached = _next_cache.get(team_id)
+    if cached is not None and now - cached[0] < _NEXT_TTL_SECONDS:
+        return cached[1]
+    today = today_et()
+    try:
+        resp = requests.get(
+            f"{MLB_API}/schedule",
+            params={
+                "sportId":   1,
+                "teamId":    team_id,
+                "startDate": today.strftime("%Y-%m-%d"),
+                "endDate":   (today + timedelta(days=_NEXT_WINDOW_DAYS)).strftime("%Y-%m-%d"),
+                "hydrate":   "linescore,team,venue(location),probablePitcher",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        if cached is not None:
+            return cached[1]
+        raise
+    game = next(
+        (g for block in data.get("dates", []) for g in block.get("games", [])
+         if g["status"]["abstractGameState"] != "Final" and not _is_no_play(g)),
+        None,
+    )
+    if game is not None:
+        _enrich_probable_pitchers({"dates": [{"games": [game]}]})
+    _next_cache[team_id] = (now, game)
+    return game
+
+
+def countdown_label(gt_str: str, now: datetime | None = None) -> str:
+    """'in 3h 12m', 'in 2d 4h', or '' once the time has passed / is unknown."""
+    try:
+        start = datetime.strptime(gt_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_UTC.utc)
+    except (ValueError, TypeError):
+        return ""
+    delta = start - (now or datetime.now(_UTC.utc))
+    secs = int(delta.total_seconds())
+    if secs <= 0:
+        return ""
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    if days:
+        return f"in {days}d {hours}h"
+    if hours:
+        return f"in {hours}h {mins}m"
+    return f"in {mins}m"
+
+
+def day_label(official_date: str, today: date | None = None) -> str:
+    """'Today', 'Tomorrow', or 'Saturday, October 3'."""
+    today = today or today_et()
+    try:
+        d = datetime.strptime(official_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return ""
+    n = (d - today).days
+    if n == 0:
+        return "Today"
+    if n == 1:
+        return "Tomorrow"
+    return d.strftime("%A, %B %-d")
+
+
+def render_next_game(team_abv: str, out=None, tz: ZoneInfo | None = None) -> str:
+    buf = io.StringIO()
+    _out = out or buf
+
+    def p(s=""):
+        print(s, file=_out)
+
+    abv = team_abv.upper()
+    if abv not in TEAMS:
+        p(f"{RED}Unknown team: {abv}{RESET}  —  try: curl mlbsched.run/teams")
+        return buf.getvalue()
+
+    team_id, name, color = TEAMS[abv]
+    p()
+    p(f"  {BOLD}{color}{name}{RESET} — {BOLD}{WHITE}Next Game{RESET}")
+    p(f"  {GRAY}{'─' * 52}{RESET}")
+
+    game = fetch_next_game(team_id)
+    if game is None:
+        p(f"  {GRAY}No games scheduled in the next {_NEXT_WINDOW_DAYS} days.{RESET}")
+        p(f"  {GRAY}Full season: curl mlbsched.run/ical/{abv}.ics{RESET}")
+        p()
+        return buf.getvalue()
+
+    _render_game_line(game, _out, tz=tz)
+
+    when = day_label(game.get("officialDate") or game.get("gameDate", "")[:10])
+    bits = [when] if when else []
+    loc = game_location(game)
+    if loc:
+        home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+        bits.append(loc[0] if home_abv == abv else f"{loc[0]} (at {home_abv})")
+    if game["status"]["abstractGameState"] == "Live":
+        bits.append(f"{GREEN}in progress{RESET}{GRAY}")
+    elif not game["status"].get("startTimeTBD"):
+        cd = countdown_label(game.get("gameDate", ""))
+        if cd:
+            bits.append(f"first pitch {cd}")
+    p(f"  {GRAY}{' · '.join(bits)}{RESET}")
+    p()
+    return buf.getvalue()
+
+
 # Standings back /standings, /wildcard and /streaks; same TTL + serve-stale
 # treatment as the schedule so a burst is one upstream call and an MLB hiccup
 # serves the last good table.
@@ -1165,6 +1292,7 @@ def render_help(out=None) -> str:
     curl mlbsched.run                      Today's full schedule
     curl mlbsched.run/<TEAM>               Team's game today        (e.g. NYM)
     curl mlbsched.run/<TEAM>/<DATE>        Team on a specific date
+    curl mlbsched.run/<TEAM>/next          Team's next game, with a countdown
     curl mlbsched.run/<DATE>               Full schedule on a date  (YYYY-MM-DD)
     curl mlbsched.run/yesterday            Yesterday's scores
     curl mlbsched.run/yesterday/<TEAM>     Team yesterday
