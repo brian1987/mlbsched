@@ -22,6 +22,7 @@ from mlbsched import (
     TEAM_ID_TO_ABV,
     fmt_team,
     today_et,
+    stats_season,
 )
 
 # Current-season roster is ~1500 players and only changes day to day; cache it
@@ -38,7 +39,7 @@ def _season_players() -> list[dict]:
     try:
         resp = requests.get(
             f"{MLB_API}/sports/1/players",
-            params={"season": today_et().year},
+            params={"season": stats_season()},
             timeout=10,
         )
         resp.raise_for_status()

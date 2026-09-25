@@ -7,7 +7,7 @@ import requests
 
 from mlbsched import (
     BOLD, DIM, RESET, RED, YELLOW, CYAN, WHITE, GRAY,
-    MLB_API, abv_from_id, team_color, today_et,
+    MLB_API, abv_from_id, team_color, stats_season,
 )
 
 # alias → (MLB API leaderCategory, display label, statGroup, format)
@@ -59,7 +59,7 @@ DASHBOARD: list[tuple[str, list[tuple[str, str, int]]]] = [
 
 def fetch_leaders(category: str, stat_group: str, limit: int = 10) -> list[dict]:
     """Returns ordered list of {rank, value, person_id, name, abv}."""
-    season = today_et().year
+    season = stats_season()
     params = {
         "leaderCategories": category,
         "statGroup":        stat_group,
@@ -120,7 +120,7 @@ def render_leaders_one(alias: str, count: int = 25, out=None) -> str:
     rows = fetch_leaders(cat, group, count)
 
     p()
-    p(f"  {BOLD}{CYAN}{label} Leaders{RESET}  {GRAY}({today_et().year} season){RESET}")
+    p(f"  {BOLD}{CYAN}{label} Leaders{RESET}  {GRAY}({stats_season()} season){RESET}")
     p(f"  {GRAY}{'─' * 52}{RESET}")
 
     if not rows:
@@ -165,7 +165,7 @@ def render_leaders_dashboard(out=None) -> str:
     fmt_by_alias: dict[str, str]    = {tasks[i][1]: tasks[i][4] for i in range(len(tasks))}
 
     p()
-    p(f"  {BOLD}{CYAN}MLB Leaders{RESET}  {GRAY}({today_et().year} season){RESET}")
+    p(f"  {BOLD}{CYAN}MLB Leaders{RESET}  {GRAY}({stats_season()} season){RESET}")
     p(f"  {GRAY}{'─' * 52}{RESET}")
 
     for group_name, tiles in DASHBOARD:
@@ -212,7 +212,7 @@ def get_leaders(alias: str, count: int = 25) -> dict | None:
         "stat":    alias,
         "label":   label,
         "group":   group,
-        "season":  today_et().year,
+        "season":  stats_season(),
         "leaders": [build_leader_json(r) for r in rows],
     }
 

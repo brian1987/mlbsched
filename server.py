@@ -558,10 +558,22 @@ def api_wildcard():
     return JSONResponse({"date": today_et().isoformat(), **wildcard.get_wildcard_json()})
 
 
+@app.get("/api/season")
+def api_season():
+    today = today_et()
+    return JSONResponse({
+        "date":            today.isoformat(),
+        "phase":           sched.season_phase(today),
+        "stats_season":    sched.stats_season(today),
+        "schedule_season": sched.schedule_season(today),
+        "dates":           sched.season_dates(today.year),
+    })
+
+
 @app.get("/api/leaders")
 def api_leaders():
     out = []
-    season = today_et().year
+    season = sched.stats_season()
     for group_name, tiles in leaders.DASHBOARD:
         for alias, title, n in tiles:
             data = leaders.get_leaders(alias, n)
@@ -1007,7 +1019,7 @@ def lineup_route(request: Request, team: str):
 def player_route(request: Request, name: str):
     # Nobody matching the fragment is a miss, not an empty result set — 404 it.
     # A one-of-many match still renders the disambiguation list at 200.
-    matches, _ = player.find_player(name, today_et().year)
+    matches, _ = player.find_player(name, sched.stats_season())
     return respond(request, player.render_player(name), status_code=200 if matches else 404)
 
 

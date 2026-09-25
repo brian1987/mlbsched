@@ -204,7 +204,7 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
     if not ids:
         return
 
-    season = today_et().year
+    season = stats_season()
     try:
         resp = requests.get(
             f"{MLB_API}/people",
@@ -258,6 +258,116 @@ def fetch_standings() -> dict:
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# ── Season awareness ──────────────────────────────────────────────────────────
+# MLB publishes each season's calendar (spring, Opening Day, All-Star break,
+# postseason). Cached 6h; a season's dates don't move mid-day.
+_SEASON_TTL_SECONDS = 6 * 60 * 60
+_season_dates_cache: dict[int, tuple[float, dict | None]] = {}
+
+
+def season_dates(year: int) -> dict | None:
+    """MLB's calendar for a season, or None if it isn't published (or MLB is down
+    and nothing is cached). Keys like regularSeasonStartDate, postSeasonEndDate."""
+    now = time.monotonic()
+    cached = _season_dates_cache.get(year)
+    if cached is not None and now - cached[0] < _SEASON_TTL_SECONDS:
+        return cached[1]
+    try:
+        resp = requests.get(f"{MLB_API}/seasons/{year}", params={"sportId": 1}, timeout=10)
+        resp.raise_for_status()
+        seasons = resp.json().get("seasons") or []
+        info = seasons[0] if seasons else None
+    except requests.RequestException:
+        return cached[1] if cached is not None else None
+    _season_dates_cache[year] = (now, info)
+    return info
+
+
+def season_date(info: dict | None, key: str) -> date | None:
+    try:
+        return datetime.strptime((info or {})[key], "%Y-%m-%d").date()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def stats_season(today: date | None = None) -> int:
+    """The season whose stats are current: this year once Opening Day has arrived,
+    otherwise last year, so January's /leaders and /player show the season that
+    actually happened instead of an empty one. Calendar guess if MLB is unreachable."""
+    today = today or today_et()
+    opening = season_date(season_dates(today.year), "regularSeasonStartDate")
+    if opening:
+        return today.year if today >= opening else today.year - 1
+    return today.year if (today.month, today.day) >= (3, 20) else today.year - 1
+
+
+def schedule_season(today: date | None = None) -> int:
+    """The season a schedule subscriber wants: next year's as soon as this year's
+    postseason is over and MLB has published it."""
+    today = today or today_et()
+    end = season_date(season_dates(today.year), "postSeasonEndDate")
+    if end and today > end and season_dates(today.year + 1):
+        return today.year + 1
+    return today.year
+
+
+def season_phase(today: date | None = None) -> str:
+    """'preseason' (Jan-Feb), 'spring', 'regular', 'allstar', 'postseason' or
+    'offseason'. 'regular' when MLB's calendar is unavailable."""
+    today = today or today_et()
+    info = season_dates(today.year)
+    if not info:
+        return "regular"
+    spring   = season_date(info, "springStartDate")
+    opening  = season_date(info, "regularSeasonStartDate")
+    asb_from = season_date(info, "lastDate1stHalf")
+    asb_to   = season_date(info, "firstDate2ndHalf")
+    reg_end  = season_date(info, "regularSeasonEndDate")
+    post_end = season_date(info, "postSeasonEndDate")
+    if spring and today < spring:
+        return "preseason"
+    if opening and today < opening:
+        return "spring"
+    if asb_from and asb_to and asb_from < today < asb_to:
+        return "allstar"
+    if reg_end and post_end and reg_end < today <= post_end:
+        return "postseason"
+    if post_end and today > post_end:
+        return "offseason"
+    return "regular"
+
+
+def _days_until(d: date, today: date) -> str:
+    n = (d - today).days
+    return "today" if n == 0 else ("tomorrow" if n == 1 else f"in {n} days")
+
+
+def render_no_games_note(today: date, out) -> None:
+    """What to say on a day with no games, depending on where we are in the year."""
+    def p(s=""):
+        print(s, file=out)
+
+    phase = season_phase(today)
+    if phase in ("offseason", "preseason"):
+        nxt = season_dates(today.year + 1 if phase == "offseason" else today.year)
+        spring  = season_date(nxt, "springStartDate")
+        opening = season_date(nxt, "regularSeasonStartDate")
+        season_label = today.year + 1 if phase == "offseason" else today.year
+        p(f"  {GRAY}Offseason.{RESET}")
+        if spring and today < spring:
+            p(f"  {CYAN}Spring training:{RESET} {spring:%A, %B %-d, %Y}  {GRAY}({_days_until(spring, today)}){RESET}")
+        if opening:
+            p(f"  {CYAN}Opening Day {season_label}:{RESET} {opening:%A, %B %-d, %Y}  {GRAY}({_days_until(opening, today)}){RESET}")
+        last = today.year if phase == "offseason" else today.year - 1
+        p(f"  {GRAY}{last} postseason: curl mlbsched.run/postseason/{last}{RESET}")
+    elif phase == "postseason":
+        p(f"  {GRAY}Postseason off day. Bracket: curl mlbsched.run/postseason{RESET}")
+    elif phase == "allstar":
+        p(f"  {GRAY}All-Star break. No games scheduled.{RESET}")
+    else:
+        p(f"  {GRAY}No games scheduled.{RESET}")
 
 
 # ── Distance helpers ──────────────────────────────────────────────────────────
@@ -988,7 +1098,7 @@ def render_smart_today(out=None, tz: ZoneInfo | None = None) -> tuple[str, bool]
         p(f"  {title}")
         p(f"  {GRAY}{'─' * 52}{RESET}")
         if not all_games:
-            p(f"  {GRAY}No games scheduled.{RESET}")
+            render_no_games_note(today, _out)
         else:
             for game in all_games:
                 _render_game_line(game, _out, tz=tz)
