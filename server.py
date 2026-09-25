@@ -172,10 +172,30 @@ def ansi_to_html(content: str) -> str:
     return "".join(out)
 
 
-def html_wrap(content: str, refresh_secs: int | None = None) -> str:
+_SITE_TITLE = "mlbsched.run — MLB scores and schedule in your terminal"
+_SITE_URL   = "https://mlbsched.run"
+
+
+def page_title(content: str) -> str:
+    """A page's own title, taken from the first line the renderer printed
+    ("MLB Standings", "New York Mets — Friday, September 25, 2026"), so a shared
+    link unfurls as that page rather than as the generic site card."""
+    for line in content.splitlines():
+        text = " ".join(_ANSI_RE.sub("", line).split())
+        if text:
+            return text[:90]
+    return ""
+
+
+def html_wrap(content: str, refresh_secs: int | None = None, path: str = "/") -> str:
     clean = ansi_to_html(content)
     refresh_tag = f'<meta http-equiv="refresh" content="{refresh_secs}">' if refresh_secs else ""
-    title = "mlbsched.run — MLB scores and schedule in your terminal"
+    own = page_title(content)
+    if own and "mlbsched.run" not in own:
+        title = _html.escape(f"{own} · mlbsched.run")
+    else:
+        title = _SITE_TITLE
+    url   = _SITE_URL + (path if path.startswith("/") else "/" + path)
     desc  = ("Live MLB scores, schedules, standings, odds, and 30+ commands — "
              "straight from your terminal with curl, or in the browser.")
     return f"""<!DOCTYPE html>
@@ -189,7 +209,7 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
   <meta property="og:site_name" content="mlbsched.run">
   <meta property="og:title" content="{title}">
   <meta property="og:description" content="{desc}">
-  <meta property="og:url" content="https://mlbsched.run/">
+  <meta property="og:url" content="{url}">
   <meta property="og:image" content="https://mlbsched.run/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -254,7 +274,7 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
 def respond(request: Request, content: str, refresh_secs: int | None = None, status_code: int = 200):
     if is_curl(request):
         return PlainTextResponse(content, status_code=status_code)
-    return HTMLResponse(html_wrap(content, refresh_secs), status_code=status_code)
+    return HTMLResponse(html_wrap(content, refresh_secs, path=request.url.path), status_code=status_code)
 
 
 def team_status(team: str) -> int:
