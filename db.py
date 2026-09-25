@@ -16,8 +16,14 @@ _local = threading.local()
 
 def _conn() -> sqlite3.Connection:
     if not hasattr(_local, "conn"):
-        _local.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _local.conn.row_factory = sqlite3.Row
+        # Request logging runs on worker threads, each with its own connection.
+        # WAL lets readers (/metrics, odds/weather cache) proceed during a write,
+        # and the busy timeout rides out two writers landing at once.
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _local.conn = conn
     return _local.conn
 
 
@@ -93,15 +99,20 @@ def write_odds_cache(data_json: str, requests_remaining: int | None):
 
 
 def log_request(path: str, ip: str, user_agent: str):
-    now = datetime.now(timezone.utc)
-    ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]
-    client = "curl" if user_agent.lower().startswith("curl") else "browser"
-    conn = _conn()
-    conn.execute(
-        "INSERT INTO requests (ts, date, path, client, ip_hash) VALUES (?, ?, ?, ?, ?)",
-        (now.isoformat(), now.strftime("%Y-%m-%d"), path, client, ip_hash),
-    )
-    conn.commit()
+    """Record one request. Never raises: this runs fire-and-forget off the event
+    loop, and a logging hiccup must not surface anywhere."""
+    try:
+        now = datetime.now(timezone.utc)
+        ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]
+        client = "curl" if user_agent.lower().startswith("curl") else "browser"
+        conn = _conn()
+        conn.execute(
+            "INSERT INTO requests (ts, date, path, client, ip_hash) VALUES (?, ?, ?, ?, ?)",
+            (now.isoformat(), now.strftime("%Y-%m-%d"), path, client, ip_hash),
+        )
+        conn.commit()
+    except Exception:
+        pass
 
 
 def query(sql: str, params: tuple = ()) -> list[sqlite3.Row]:

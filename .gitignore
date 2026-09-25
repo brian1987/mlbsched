@@ -8,3 +8,4 @@ metrics.db
 *.log
 .vscode/
 .idea/
+metrics.db-*
