@@ -44,7 +44,8 @@ def test_ansi_to_html_escapes_and_colors():
 def test_cache_headers(client):
     r = client.get("/teams", headers=CURL)
     assert r.headers["cache-control"] == "private, max-age=30"
-    assert r.headers["vary"] == "User-Agent"
+    # Newer Starlette's CORS middleware appends "Origin"; ours must be in the list.
+    assert "User-Agent" in [v.strip() for v in r.headers["vary"].split(",")]
     assert client.get("/og.png").headers.get("cache-control", "").startswith("public") or client.get("/og.png").status_code == 404
 
 
