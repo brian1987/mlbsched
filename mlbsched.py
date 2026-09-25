@@ -250,14 +250,60 @@ def _enrich_probable_pitchers(schedule_data: dict) -> None:
             pp["_hand"] = hand
 
 
+# Standings back /standings, /wildcard and /streaks; same TTL + serve-stale
+# treatment as the schedule so a burst is one upstream call and an MLB hiccup
+# serves the last good table.
+_STANDINGS_TTL_SECONDS = 60
+_standings_cache: tuple[float, dict] | None = None   # (fetched_at_monotonic, data)
+
+
 def fetch_standings() -> dict:
-    resp = requests.get(
-        f"{MLB_API}/standings",
-        params={"leagueId": "103,104", "standingsTypes": "regularSeason", "hydrate": "team,division"},
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    global _standings_cache
+    now = time.monotonic()
+    if _standings_cache is not None and now - _standings_cache[0] < _STANDINGS_TTL_SECONDS:
+        return _standings_cache[1]
+    try:
+        resp = requests.get(
+            f"{MLB_API}/standings",
+            params={"leagueId": "103,104", "standingsTypes": "regularSeason", "hydrate": "team,division"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        if _standings_cache is not None:
+            return _standings_cache[1]
+        raise
+    _standings_cache = (now, data)
+    return data
+
+
+def rank_key(t: dict, field: str) -> tuple[int, float]:
+    """Sort key for a standings row: MLB's own rank (tiebreakers applied) first,
+    winning percentage as the fallback when the rank isn't published."""
+    try:
+        rank = int(t.get(field) or 0)
+    except (TypeError, ValueError):
+        rank = 0
+    return (rank if rank > 0 else 10_000, -float(t.get("winningPercentage") or 0))
+
+
+# MLB's clinchIndicator letters, in the order newspapers print them.
+CLINCH_LABELS = {
+    "x": "clinched playoff berth",
+    "w": "clinched wild card",
+    "y": "clinched division",
+    "z": "clinched best record in league",
+}
+
+
+def clinch_letter(t: dict) -> str:
+    """'x'/'w'/'y'/'z' for a clinched team, '' otherwise. MLB also sends 'e' for
+    eliminated teams; the E# column already says that, so it's dropped."""
+    c = (t.get("clinchIndicator") or "").lower()
+    if c in CLINCH_LABELS:
+        return c
+    return "x" if t.get("clinched") else ""
 
 
 # ── Distance helpers ──────────────────────────────────────────────────────────
@@ -846,7 +892,7 @@ def render_standings(out=None) -> str:
 
     data = fetch_standings()
     show_race    = _has_race_numbers(data)
-    any_clinched = False
+    letters_used: set[str] = set()
 
     p()
     p(f"  {BOLD}{CYAN}MLB Standings{RESET}")
@@ -860,7 +906,7 @@ def render_standings(out=None) -> str:
             header += f" {'M#':>4} {'E#':>4}"
         p(header + RESET)
 
-        teams = sorted(record.get("teamRecords", []), key=lambda x: -float(x.get("winningPercentage", 0)))
+        teams = sorted(record.get("teamRecords", []), key=lambda x: rank_key(x, "divisionRank"))
         for i, t in enumerate(teams):
             team_id = t["team"]["id"]
             abv     = abv_from_id(team_id)
@@ -876,16 +922,19 @@ def render_standings(out=None) -> str:
             row = f"  {marker}{name:<22}{RESET} {wins:>3} {losses:>3} {pct:>5} {gb:>5} {l10:>5} {rdif:>5}"
             if show_race:
                 row += f" {race_number(t.get('magicNumber')):>4} {race_number(t.get('eliminationNumber')):>4}"
-            if t.get("clinched"):
-                any_clinched = True
-                row += f" {BOLD}{GREEN}*{RESET}"
+            letter = clinch_letter(t)
+            if letter:
+                letters_used.add(letter)
+                row += f" {BOLD}{GREEN}{letter}{RESET}"
             p(row)
 
     if show_race:
         p()
         p(f"  {GRAY}M# = magic number · E# = elimination number{RESET}")
-        if any_clinched:
-            p(f"  {GRAY}*  = clinched a playoff berth · bracket: curl mlbsched.run/postseason{RESET}")
+        if letters_used:
+            legend = " · ".join(f"{k} = {v}" for k, v in CLINCH_LABELS.items() if k in letters_used)
+            p(f"  {GRAY}{legend}{RESET}")
+            p(f"  {GRAY}bracket: curl mlbsched.run/postseason{RESET}")
 
     p()
     return buf.getvalue()
@@ -912,15 +961,13 @@ def build_standings_json() -> dict:
     divisions = []
     for record in data.get("records", []):
         league_id = (record.get("league") or {}).get("id")
-        teams = sorted(
-            record.get("teamRecords", []),
-            key=lambda x: -float(x.get("winningPercentage", 0)),
-        )
+        teams = sorted(record.get("teamRecords", []), key=lambda x: rank_key(x, "divisionRank"))
         rows = []
         for t in teams:
             abv = abv_from_id(t["team"]["id"])
             rows.append({
                 "team":            abv,
+                "rank":            int(t.get("divisionRank") or 0) or None,
                 "name":            TEAMS.get(abv, (None, t["team"]["name"], None))[1],
                 "wins":            t.get("wins", 0),
                 "losses":          t.get("losses", 0),
@@ -932,6 +979,7 @@ def build_standings_json() -> dict:
                 "magic":           race_number(t.get("magicNumber")),
                 "elim":            race_number(t.get("eliminationNumber")),
                 "clinched":        t.get("clinched", False),
+                "clinch":          clinch_letter(t) or None,
             })
         divisions.append({
             "division": (record.get("division") or {}).get("name", "Unknown Division"),
@@ -1199,6 +1247,11 @@ def main():
         import postseason
         year = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
         postseason.render_postseason(year, out=sys.stdout)
+        return
+
+    if first == "wildcard":
+        import wildcard
+        wildcard.render_wildcard(out=sys.stdout)
         return
 
     if first == "yesterday":
