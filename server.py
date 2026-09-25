@@ -2,8 +2,11 @@
 
 import os
 import re
+import hmac
 import time
+import asyncio
 import html as _html
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
@@ -33,11 +36,13 @@ import ical
 import pitchers
 import about
 
-app = FastAPI(docs_url=None, redoc_url=None)
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     db.init_db()
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 
 _OG_IMAGE = Path(__file__).resolve().parent / "static" / "og.png"
 
@@ -51,10 +56,13 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     if path in _NO_LOG_PATHS:
         return response
+    # The insert+commit is a synchronous fsync; run it on a worker thread and don't
+    # wait for it, so a burst of requests never queues behind SQLite on the event
+    # loop. db.log_request swallows its own errors.
     try:
         ip = get_client_ip(request)
         ua = request.headers.get("user-agent", "")
-        db.log_request(path, ip, ua)
+        asyncio.get_running_loop().run_in_executor(None, db.log_request, path, ip, ua)
     except Exception:
         pass
     # Responses vary by User-Agent (curl text vs browser HTML) and viewer timezone,
@@ -261,10 +269,17 @@ def team_status(team: str) -> int:
 # ── IP geolocation ────────────────────────────────────────────────────────────
 
 def get_client_ip(request: Request) -> str:
+    """The viewer's IP as seen by the proxies in front of us. Cloudflare and Fly
+    each set a header that a client can't forge; X-Forwarded-For's first entry
+    is client-supplied and only a last resort."""
+    for header in ("cf-connecting-ip", "fly-client-ip"):
+        ip = request.headers.get(header)
+        if ip:
+            return ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else ""
 
 
 def _geo_lookup(ip: str) -> dict | None:
@@ -840,7 +855,7 @@ def metrics(request: Request, days: int = 30):
             status_code=503,
         )
     auth = request.headers.get("authorization", "")
-    if not (auth.startswith("Bearer ") and auth[7:] == expected):
+    if not (auth.startswith("Bearer ") and hmac.compare_digest(auth[7:], expected)):
         return PlainTextResponse(
             "unauthorized — pass Authorization: Bearer <token>\n",
             status_code=401,
