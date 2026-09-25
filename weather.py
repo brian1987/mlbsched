@@ -10,15 +10,16 @@ import requests
 import db
 from mlbsched import (
     BOLD, DIM, RESET, RED, GREEN, YELLOW, BLUE, CYAN, WHITE, GRAY,
-    TEAMS, STADIUMS, SPECIAL_VENUES, team_color, fmt_team, today_et, ET,
-    fmt_game_time, abv_from_id,
+    TEAMS, team_color, fmt_team, today_et, ET,
+    fmt_game_time, abv_from_id, game_location,
 )
 
 CACHE_TTL_SECONDS = 1800  # 30 minutes
 
-# Stadiums where weather is not meaningful (fixed dome, no retractable roof).
-# Retractable-roof parks still get weather since roofs are often open.
-INDOOR_STADIUMS: set[str] = set()  # currently empty — Rogers Centre, etc. are retractable
+# Venues where weather is not meaningful (fixed dome, no retractable roof).
+# Retractable-roof parks still get weather since roofs are often open. Keyed by
+# MLB venue name so a team playing elsewhere (TB in 2025) isn't misclassified.
+INDOOR_VENUES: set[str] = {"Tropicana Field"}
 
 
 def _cache_key(lat: float, lon: float) -> str:
@@ -90,18 +91,11 @@ def fmt_weather_compact(w: dict | None) -> str | None:
 
 def stadium_location(game: dict) -> tuple[str, float, float] | None:
     """Return (stadium_name, lat, lon) for a game, or None if unknown."""
-    venue_name = game.get("venue", {}).get("name", "")
-    if venue_name in SPECIAL_VENUES:
-        return SPECIAL_VENUES[venue_name]
-    home_id  = game["teams"]["home"]["team"]["id"]
-    home_abv = abv_from_id(home_id)
-    return STADIUMS.get(home_abv)
+    return game_location(game)
 
 
 def is_indoor(game: dict) -> bool:
-    home_id  = game["teams"]["home"]["team"]["id"]
-    home_abv = abv_from_id(home_id)
-    return home_abv in INDOOR_STADIUMS
+    return (game.get("venue") or {}).get("name", "") in INDOOR_VENUES
 
 
 def weather_line_for_game(game: dict) -> str | None:

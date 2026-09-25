@@ -379,6 +379,8 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
         "start_time_tbd": time_tbd,
         "game_type": game.get("gameType"),
         "series": sched.series_tag(game) or None,
+        "doubleheader": sched.is_doubleheader(game),
+        "game_number": game.get("gameNumber"),
         "description": game.get("description") or None,
         "stadium": stadium_name,
         "stadium_lat": stadium_lat,
@@ -392,16 +394,11 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
 # specific /api/* routes must be registered before /api/{team}
 @app.get("/api/live")
 def api_live(request: Request):
-    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"))
     geo = geolocate_ip(get_client_ip(request))
     user_lat = geo["lat"] if geo else None
     user_lon = geo["lon"] if geo else None
     tz = get_user_tz(geo)
-    games = []
-    for date_block in data.get("dates", []):
-        for game in date_block.get("games", []):
-            if game["status"]["abstractGameState"] == "Live":
-                games.append(build_game_json(game, user_lat, user_lon, tz))
+    games = [build_game_json(g, user_lat, user_lon, tz) for g in sched.live_games_now()]
     return JSONResponse({"date": today_et().isoformat(), "games": games})
 
 
