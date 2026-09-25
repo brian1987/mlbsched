@@ -12,7 +12,7 @@ import requests
 import mlbsched as sched
 from mlbsched import (
     BOLD, DIM, RESET, YELLOW, CYAN, WHITE, GRAY,
-    abv_from_id, fmt_team, fmt_game_time, today_et,
+    abv_from_id, fmt_team, fmt_game_time, game_time_label, today_et,
 )
 
 _HAND = {"R": "RHP", "L": "LHP", "S": "SP"}
@@ -39,7 +39,7 @@ def _stat_bits(pp: dict) -> str:
 def _game_state(game: dict, tz: ZoneInfo | None) -> str:
     abstract = (game.get("status") or {}).get("abstractGameState", "")
     if abstract == "Preview":
-        return fmt_game_time(game.get("gameDate", ""), tz) or "TBD"
+        return game_time_label(game, tz) or "TBD"
     if abstract == "Final":
         return "Final"
     return abstract or "TBD"
@@ -131,7 +131,8 @@ def build_pitchers_json(tz: ZoneInfo | None = None) -> dict:
             games_out.append({
                 "away":          away_abv,
                 "home":          home_abv,
-                "game_time":     fmt_game_time(game.get("gameDate", ""), tz) or None,
+                "game_time":     None if (game.get("status") or {}).get("startTimeTBD") else (fmt_game_time(game.get("gameDate", ""), tz) or None),
+                "start_time_tbd": bool((game.get("status") or {}).get("startTimeTBD")),
                 "status":        (game.get("status") or {}).get("abstractGameState"),
                 "away_pitcher":  _pitcher_json(game["teams"]["away"].get("probablePitcher")),
                 "home_pitcher":  _pitcher_json(game["teams"]["home"].get("probablePitcher")),

@@ -107,16 +107,16 @@ STADIUMS = {
     "BAL": ("Oriole Park at Camden Yards",  39.2839,  -76.6218),
     "BOS": ("Fenway Park",                  42.3467,  -71.0972),
     "CHC": ("Wrigley Field",                41.9484,  -87.6553),
-    "CWS": ("Guaranteed Rate Field",        41.8300,  -87.6339),
+    "CWS": ("Rate Field",                   41.8300,  -87.6339),
     "CIN": ("Great American Ball Park",     39.0974,  -84.5069),
     "CLE": ("Progressive Field",            41.4962,  -81.6852),
     "COL": ("Coors Field",                  39.7559, -104.9942),
     "DET": ("Comerica Park",                42.3390,  -83.0485),
-    "HOU": ("Minute Maid Park",             29.7572,  -95.3556),
+    "HOU": ("Daikin Park",                  29.7572,  -95.3556),
     "KC":  ("Kauffman Stadium",             39.0517,  -94.4803),
     "LAA": ("Angel Stadium",                33.8003, -117.8827),
     "LAD": ("Dodger Stadium",               34.0739, -118.2400),
-    "MIA": ("loanDepot Park",               25.7781,  -80.2197),
+    "MIA": ("loanDepot park",               25.7781,  -80.2197),
     "MIL": ("American Family Field",        43.0280,  -87.9712),
     "MIN": ("Target Field",                 44.9817,  -93.2783),
     "NYM": ("Citi Field",                   40.7571,  -73.8458),
@@ -168,7 +168,7 @@ def fetch_schedule(date_str: str, team_id: int | None = None) -> dict:
     params = {
         "sportId": 1,
         "date": date_str,
-        "hydrate": "linescore,team,venue,probablePitcher",
+        "hydrate": "linescore,team,venue(location),probablePitcher",
     }
     if team_id:
         params["teamId"] = team_id
@@ -262,8 +262,18 @@ def fetch_standings() -> dict:
 
 # ── Distance helpers ──────────────────────────────────────────────────────────
 def game_location(game: dict) -> tuple[str, float, float] | None:
-    """Return (venue_name, lat, lon) for a game, handling neutral/international sites."""
-    venue_name = game.get("venue", {}).get("name", "")
+    """Return (venue_name, lat, lon) for a game.
+
+    Prefers what MLB says: the hydrated venue carries the current name (parks get
+    renamed most winters — Rate Field, Daikin Park) and coordinates, which also
+    covers neutral sites we've never heard of. STADIUMS/SPECIAL_VENUES are the
+    fallback for payloads without the hydrate (older cached data, tests)."""
+    venue = game.get("venue") or {}
+    venue_name = venue.get("name", "")
+    coords = ((venue.get("location") or {}).get("defaultCoordinates") or {})
+    lat, lon = coords.get("latitude"), coords.get("longitude")
+    if venue_name and lat is not None and lon is not None:
+        return venue_name, float(lat), float(lon)
 
     if venue_name in SPECIAL_VENUES:
         return SPECIAL_VENUES[venue_name]
@@ -272,7 +282,7 @@ def game_location(game: dict) -> tuple[str, float, float] | None:
     home_abv = abv_from_id(home_id)
     stadium  = STADIUMS.get(home_abv)
     if stadium:
-        return stadium  # (name, lat, lon)
+        return (venue_name or stadium[0], stadium[1], stadium[2])
 
     return None
 
@@ -341,6 +351,45 @@ def series_tag(game: dict) -> str:
     tag = f"{league}{round_}"
     num = game.get("seriesGameNumber")
     return f"{tag} G{num}" if num else tag
+
+
+def game_tag(game: dict) -> str:
+    """What distinguishes this game on a schedule line: the postseason series tag,
+    or 'G1'/'G2' for a doubleheader (MLB doubleHeader Y = traditional, S = split).
+    Empty for an ordinary regular-season game."""
+    tag = series_tag(game)
+    if tag:
+        return tag
+    if game.get("doubleHeader") in ("Y", "S") and game.get("gameNumber"):
+        return f"G{game['gameNumber']}"
+    return ""
+
+
+def is_doubleheader(game: dict) -> bool:
+    return game.get("doubleHeader") in ("Y", "S")
+
+
+def live_games_now() -> list[dict]:
+    """Every game in progress right now.
+
+    today_et() rolls over at 1am ET, but a 10:10pm ET first pitch on the West
+    Coast routinely runs past that, so between 1am and 5am ET we also look at
+    the previous date. Both fetches hit the schedule cache."""
+    now = datetime.now(ET)
+    today = today_et()
+    dates = [today]
+    if 1 <= now.hour < 5:
+        dates.insert(0, today - timedelta(days=1))
+    live: list[dict] = []
+    for d in dates:
+        data = fetch_schedule(d.strftime("%Y-%m-%d"))
+        live.extend(
+            g
+            for block in data.get("dates", [])
+            for g in block.get("games", [])
+            if g["status"]["abstractGameState"] == "Live"
+        )
+    return live
 
 
 def game_time_label(game: dict, tz: ZoneInfo | None = None) -> str:
@@ -571,8 +620,11 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
         h_sc  = f"{GRAY}  -{RESET}"
         state = f"{CYAN}{game_time}{RESET}" if game_time else f"{GRAY}{status}{RESET}"
 
-    tag = series_tag(game)
-    suffix = f"  {GRAY}{tag}{RESET}" if tag else ""
+    notes = [game_tag(game)]
+    if abstract == "Preview" and game.get("description"):
+        notes.append(game["description"])          # "Makeup of 9/26 PPD", "Moved from 9/27"
+    note = " · ".join(n for n in notes if n)
+    suffix = f"  {GRAY}{note}{RESET}" if note else ""
     if dist_label:
         suffix += f"   {dist_label}"
     print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
@@ -968,6 +1020,9 @@ def build_box_json(team_abv: str, date_str: str) -> dict:
                 "start_time_tbd": bool(game["status"].get("startTimeTBD")),
                 "game_type":  game.get("gameType"),
                 "series":     series_tag(game) or None,
+                "doubleheader": is_doubleheader(game),
+                "game_number": game.get("gameNumber"),
+                "description": game.get("description") or None,
                 "venue":      loc[0] if loc else None,
                 "innings":    innings,
                 "totals":     {"away": away_t, "home": home_t},
@@ -985,15 +1040,7 @@ def render_live(out=None, tz: ZoneInfo | None = None) -> str:
         print(s, file=_out)
 
     today = today_et()
-    date_str = today.strftime("%Y-%m-%d")
-    data = fetch_schedule(date_str)
-
-    live_games = [
-        game
-        for date_block in data.get("dates", [])
-        for game in date_block.get("games", [])
-        if game["status"]["abstractGameState"] == "Live"
-    ]
+    live_games = live_games_now()
 
     p()
     p(f"  {BOLD}{GREEN}Live Scores{RESET} — {BOLD}{WHITE}{today.strftime('%A, %B %-d, %Y')}{RESET}")
@@ -1028,7 +1075,7 @@ def render_smart_today(out=None, tz: ZoneInfo | None = None) -> tuple[str, bool]
         for date_block in data.get("dates", [])
         for game in date_block.get("games", [])
     ]
-    live_games = [g for g in all_games if g["status"]["abstractGameState"] == "Live"]
+    live_games = live_games_now()          # includes last night's late games before 5am ET
     has_live = bool(live_games)
 
     if has_live:
