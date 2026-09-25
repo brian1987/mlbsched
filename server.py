@@ -32,6 +32,7 @@ import wp
 import ical
 import pitchers
 import about
+import postseason
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
@@ -327,16 +328,17 @@ def get_user_tz(geo: dict | None) -> ZoneInfo | None:
 # ── JSON API ─────────────────────────────────────────────────────────────────
 
 def build_game_json(game: dict, user_lat: float | None = None, user_lon: float | None = None, tz: ZoneInfo | None = None) -> dict:
-    away_id   = game["teams"]["away"]["team"]["id"]
-    home_id   = game["teams"]["home"]["team"]["id"]
-    away_abv  = sched.abv_from_id(away_id)
-    home_abv  = sched.abv_from_id(home_id)
+    away_team = game["teams"]["away"]["team"]
+    home_team = game["teams"]["home"]["team"]
+    away_abv  = sched.team_label(away_team)
+    home_abv  = sched.team_label(home_team)
     abstract  = game["status"]["abstractGameState"]
     status    = game["status"]["detailedState"]
     reason    = game["status"].get("reason") or None
     linescore = game.get("linescore", {})
+    time_tbd  = bool(game["status"].get("startTimeTBD"))
 
-    game_time = sched.fmt_game_time(game.get("gameDate", ""), tz) or None
+    game_time = None if time_tbd else (sched.fmt_game_time(game.get("gameDate", ""), tz) or None)
 
     loc = sched.game_location(game)
     stadium_name = loc[0] if loc else None
@@ -360,10 +362,12 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
         }
 
     return {
-        "away": away_abv,
-        "away_name": sched.TEAMS.get(away_abv, (None, away_abv, None))[1],
-        "home": home_abv,
-        "home_name": sched.TEAMS.get(home_abv, (None, home_abv, None))[1],
+        # A placeholder bracket slot ("AL Wild Card #2") has no abbreviation: null,
+        # with the slot's name in *_name so clients can still label it.
+        "away": None if sched.is_placeholder_team(away_team) else away_abv,
+        "away_name": sched.TEAMS.get(away_abv, (None, away_team.get("name", away_abv), None))[1],
+        "home": None if sched.is_placeholder_team(home_team) else home_abv,
+        "home_name": sched.TEAMS.get(home_abv, (None, home_team.get("name", home_abv), None))[1],
         "away_score": game["teams"]["away"].get("score"),
         "home_score": game["teams"]["home"].get("score"),
         "status": abstract,
@@ -372,6 +376,10 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
         "inning": linescore.get("currentInning"),
         "inning_half": linescore.get("inningHalf"),
         "game_time": game_time,
+        "start_time_tbd": time_tbd,
+        "game_type": game.get("gameType"),
+        "series": sched.series_tag(game) or None,
+        "description": game.get("description") or None,
         "stadium": stadium_name,
         "stadium_lat": stadium_lat,
         "stadium_lon": stadium_lon,
@@ -551,6 +559,18 @@ def api_standings():
 @app.get("/api/teams")
 def api_teams():
     return JSONResponse(sched.build_team_list_json())
+
+
+@app.get("/api/postseason")
+def api_postseason():
+    data = postseason.build_postseason_json()
+    return JSONResponse(data, status_code=503 if "error" in data else 200)
+
+
+@app.get("/api/postseason/{season}")
+def api_postseason_year(season: int):
+    data = postseason.build_postseason_json(season)
+    return JSONResponse(data, status_code=503 if "error" in data else 200)
 
 
 @app.get("/api/wildcard")
@@ -1027,6 +1047,26 @@ def h2h_route(request: Request, team_a: str, team_b: str):
 @app.get("/wildcard")
 def wildcard_today(request: Request):
     return respond(request, wildcard.render_wildcard())
+
+
+@app.get("/postseason")
+@app.get("/playoffs")
+@app.get("/bracket")
+def postseason_route(request: Request):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, postseason.render_postseason(tz=tz))
+
+
+@app.get("/postseason/{season}")
+def postseason_year(request: Request, season: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    if not season.isdigit() or not (1903 <= int(season) <= today_et().year):
+        msg = (
+            f"\n  {sched.RED}Unknown season: {season}{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/postseason/2015{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
+    return respond(request, postseason.render_postseason(int(season), tz=tz))
 
 
 @app.get("/leaders")

@@ -41,6 +41,10 @@ curl mlbsched.run/standings
 # Wild Card race per league (3 division leaders + WC1–3 above the cutoff)
 curl mlbsched.run/wildcard
 
+# Playoff bracket — series records, live games, what's next (or a past year)
+curl mlbsched.run/postseason
+curl mlbsched.run/postseason/2015
+
 # Head-to-head season series between two teams
 curl mlbsched.run/h2h/NYM/PHI
 
@@ -134,6 +138,13 @@ division leader has no elimination number. Both come straight from the MLB Stats
 API, and the columns are omitted entirely in the early season and the offseason,
 when MLB isn't publishing them.
 
+## Postseason
+
+From the day the bracket is published, schedule lines carry a series tag
+(`ALWC G1`, `NLDS G2`, `ALCS G5`, `WS G7`). Slots MLB hasn't filled yet show
+`TBD` with the slot's name beneath ("AL Wild Card #2 @ New York Yankees"), and
+a game whose first pitch hasn't been set prints `TBD` instead of a time.
+
 ## JSON API
 
 Every data endpoint above has a JSON variant under `/api/`. The date-scoped schedule
@@ -148,6 +159,8 @@ curl mlbsched.run/api/box/NYM/random
 curl mlbsched.run/api/standings
 curl mlbsched.run/api/teams
 curl mlbsched.run/api/wildcard
+curl mlbsched.run/api/postseason
+curl mlbsched.run/api/postseason/2015
 curl mlbsched.run/api/h2h/NYM/PHI
 curl mlbsched.run/api/pitchers
 curl mlbsched.run/api/lineup/NYM

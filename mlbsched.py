@@ -307,6 +307,51 @@ def abv_from_team(team: dict) -> str:
     return abv_from_id(team.get("id"))
 
 
+def is_placeholder_team(team: dict) -> bool:
+    """True for MLB's unfilled bracket slots ("AL Wild Card #2", "NL 3/6 Winner",
+    "Lower Seed League Champion"), which carry ids outside the 30 real clubs."""
+    if not team:
+        return True
+    if team.get("id") in TEAM_ID_TO_ABV:
+        return False
+    return team.get("name", "") not in HISTORICAL_NAME_TO_ABV
+
+
+def team_label(team: dict) -> str:
+    """Abbreviation for a schedule team dict, historical-name aware; 'TBD' for a
+    placeholder slot. Use this instead of abv_from_id when the team may not be
+    one of the 30 current clubs (postseason previews, old games)."""
+    if is_placeholder_team(team):
+        return "TBD"
+    return abv_from_team(team)
+
+
+# Postseason game types → round label. Spring (S) and regular (R) get no tag.
+_ROUND_TAG = {"F": "WC", "D": "DS", "L": "CS", "W": "WS"}
+
+
+def series_tag(game: dict) -> str:
+    """Compact series label for a postseason game: 'ALWC G1', 'NLDS G2', 'ALCS G5',
+    'WS G7'. Empty for regular-season and spring games."""
+    round_ = _ROUND_TAG.get(game.get("gameType", ""))
+    if not round_:
+        return ""
+    desc = game.get("seriesDescription", "") or ""
+    league = desc[:2] if desc[:2] in ("AL", "NL") and round_ != "WS" else ""
+    tag = f"{league}{round_}"
+    num = game.get("seriesGameNumber")
+    return f"{tag} G{num}" if num else tag
+
+
+def game_time_label(game: dict, tz: ZoneInfo | None = None) -> str:
+    """First-pitch time in the viewer's zone, or 'TBD' when MLB hasn't set one.
+    MLB fills unset times with a sentinel (07:33Z) that would otherwise print as
+    a real-looking '3:33 AM', so check the flag before formatting."""
+    if (game.get("status") or {}).get("startTimeTBD"):
+        return "TBD"
+    return fmt_game_time(game.get("gameDate", ""), tz)
+
+
 def fmt_team(abv: str, width: int = 3) -> str:
     color = team_color(abv)
     return f"{BOLD}{color}{abv:<{width}}{RESET}"
@@ -464,10 +509,11 @@ def render_schedule(date_str: str, team_abv: str | None = None, out=None, tz: Zo
 
 
 def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: ZoneInfo | None = None):
-    away_id   = game["teams"]["away"]["team"]["id"]
-    home_id   = game["teams"]["home"]["team"]["id"]
-    away_abv  = abv_from_id(away_id)
-    home_abv  = abv_from_id(home_id)
+    away_team = game["teams"]["away"]["team"]
+    home_team = game["teams"]["home"]["team"]
+    away_abv  = team_label(away_team)
+    home_abv  = team_label(home_team)
+    any_placeholder = is_placeholder_team(away_team) or is_placeholder_team(home_team)
 
     status    = game["status"]["detailedState"]
     abstract  = game["status"]["abstractGameState"]
@@ -489,10 +535,15 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
 
     game_time = ""
     if abstract == "Preview" and not is_no_play:
-        game_time = fmt_game_time(game.get("gameDate", ""), tz)
+        game_time = game_time_label(game, tz)
 
-    away_str = fmt_team(away_abv)
-    home_str = fmt_team(home_abv)
+    def team_str(team: dict, abv: str) -> str:
+        if is_placeholder_team(team):
+            return f"{GRAY}{'TBD':<3}{RESET}"
+        return fmt_team(abv)
+
+    away_str = team_str(away_team, away_abv)
+    home_str = team_str(home_team, home_abv)
 
     if is_no_play:
         a_sc = f"{GRAY}{fmt_score(away_score)}{RESET}"
@@ -520,10 +571,16 @@ def _render_game_line(game: dict, out=None, dist_label: str | None = None, tz: Z
         h_sc  = f"{GRAY}  -{RESET}"
         state = f"{CYAN}{game_time}{RESET}" if game_time else f"{GRAY}{status}{RESET}"
 
-    suffix = f"   {dist_label}" if dist_label else ""
+    tag = series_tag(game)
+    suffix = f"  {GRAY}{tag}{RESET}" if tag else ""
+    if dist_label:
+        suffix += f"   {dist_label}"
     print(f"  {away_str} {a_sc}  {DIM}@{RESET}  {home_str} {h_sc}   {state}{suffix}", file=out)
 
-    if abstract == "Preview" and not is_no_play:
+    if any_placeholder:
+        # Bracket slot not filled yet: say who the slot is for.
+        print(f"         {GRAY}{away_team.get('name', 'TBD')}  @  {home_team.get('name', 'TBD')}{RESET}", file=out)
+    elif abstract == "Preview" and not is_no_play:
         away_pp = game["teams"]["away"].get("probablePitcher")
         home_pp = game["teams"]["home"].get("probablePitcher")
         if away_pp or home_pp:
@@ -559,8 +616,8 @@ def render_boxscore(game: dict, out=None) -> str:
     if not innings:
         return buf.getvalue()
 
-    away_abv = abv_from_id(game["teams"]["away"]["team"]["id"])
-    home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+    away_abv = team_label(game["teams"]["away"]["team"])
+    home_abv = team_label(game["teams"]["home"]["team"])
 
     teams_totals = ls.get("teams", {})
     away_totals  = teams_totals.get("away", {})
@@ -776,7 +833,7 @@ def render_standings(out=None) -> str:
         p()
         p(f"  {GRAY}M# = magic number · E# = elimination number{RESET}")
         if any_clinched:
-            p(f"  {GRAY}*  = clinched a playoff berth{RESET}")
+            p(f"  {GRAY}*  = clinched a playoff berth · bracket: curl mlbsched.run/postseason{RESET}")
 
     p()
     return buf.getvalue()
@@ -865,8 +922,10 @@ def build_box_json(team_abv: str, date_str: str) -> dict:
     games_out: list[dict] = []
     for block in data.get("dates", []):
         for game in block.get("games", []):
-            away_abv = abv_from_id(game["teams"]["away"]["team"]["id"])
-            home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
+            away_team = game["teams"]["away"]["team"]
+            home_team = game["teams"]["home"]["team"]
+            away_abv = team_label(away_team)
+            home_abv = team_label(home_team)
             status   = game["status"]["abstractGameState"]
 
             ls      = game.get("linescore", {})
@@ -895,10 +954,10 @@ def build_box_json(team_abv: str, date_str: str) -> dict:
 
             games_out.append({
                 "game_pk":    game.get("gamePk"),
-                "away":       away_abv,
-                "away_name":  TEAMS.get(away_abv, (None, away_abv, None))[1],
-                "home":       home_abv,
-                "home_name":  TEAMS.get(home_abv, (None, home_abv, None))[1],
+                "away":       None if is_placeholder_team(away_team) else away_abv,
+                "away_name":  TEAMS.get(away_abv, (None, away_team.get("name", away_abv), None))[1],
+                "home":       None if is_placeholder_team(home_team) else home_abv,
+                "home_name":  TEAMS.get(home_abv, (None, home_team.get("name", home_abv), None))[1],
                 "away_score": game["teams"]["away"].get("score"),
                 "home_score": game["teams"]["home"].get("score"),
                 "status":     status,
@@ -906,6 +965,9 @@ def build_box_json(team_abv: str, date_str: str) -> dict:
                 "reason":     game["status"].get("reason") or None,
                 # UTC as MLB reports it — no viewer-timezone personalization, unlike the HTML routes.
                 "game_date":  game.get("gameDate") or None,
+                "start_time_tbd": bool(game["status"].get("startTimeTBD")),
+                "game_type":  game.get("gameType"),
+                "series":     series_tag(game) or None,
                 "venue":      loc[0] if loc else None,
                 "innings":    innings,
                 "totals":     {"away": away_t, "home": home_t},
@@ -1025,6 +1087,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/weather              Current weather at each stadium
     curl mlbsched.run/standings            Division standings (W-L, PCT, GB, L10, run diff)
     curl mlbsched.run/wildcard             Wild Card race per league
+    curl mlbsched.run/postseason           Playoff bracket — series records, live games, what's next
+    curl mlbsched.run/postseason/<YEAR>    A past postseason (e.g. 2015)
     curl mlbsched.run/h2h/<TEAM>/<TEAM>    Season head-to-head series
     curl mlbsched.run/player/<NAME>        Player season stats + last game (e.g. lindor)
     curl mlbsched.run/lineup/<TEAM>        Today's batting order for a team's game
@@ -1082,6 +1146,12 @@ def main():
 
     if first == "standings":
         render_standings(out=sys.stdout)
+        return
+
+    if first == "postseason":
+        import postseason
+        year = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+        postseason.render_postseason(year, out=sys.stdout)
         return
 
     if first == "yesterday":
