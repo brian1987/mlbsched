@@ -5,6 +5,7 @@ import io
 from mlbsched import (
     BOLD, DIM, RESET, YELLOW, CYAN, WHITE, GRAY, GREEN,
     TEAMS, abv_from_id, team_color, fetch_standings, race_number,
+    rank_key, clinch_letter, CLINCH_LABELS,
 )
 
 LEAGUES = {
@@ -42,6 +43,9 @@ def _team_summary(t: dict) -> dict:
         "wc_elim":         t.get("wildCardEliminationNumber", "-"),
         "magic":           t.get("magicNumber"),
         "clinched":        t.get("clinched", False),
+        "clinch":          clinch_letter(t),
+        "_league_key":     rank_key(t, "leagueRank"),
+        "_wc_key":         rank_key(t, "wildCardRank"),
     }
 
 
@@ -59,8 +63,9 @@ def get_wildcard() -> dict:
     for league_id, teams in by_league.items():
         leaders     = [t for t in teams if t["division_leader"]]
         non_leaders = [t for t in teams if not t["division_leader"]]
-        leaders.sort(key=lambda x: -_pct(x["pct"]))
-        non_leaders.sort(key=lambda x: -_pct(x["pct"]))
+        # MLB's ranks carry the tiebreakers; pct alone can't order two teams at .497.
+        leaders.sort(key=lambda x: x["_league_key"])
+        non_leaders.sort(key=lambda x: x["_wc_key"])
         out[league_id] = {
             "leaders":  leaders,
             "wildcard": non_leaders[:3],
@@ -86,7 +91,7 @@ def _wc_row(rank: int, t: dict, in_line: bool, out) -> None:
     wc_e   = race_number(t.get("wc_elim"))
     abv_marker  = f"{BOLD}{color}" if in_line else f"{color}"
     name_marker = f"{BOLD}{WHITE}" if in_line else RESET
-    clinch      = f" {BOLD}{GREEN}*{RESET}" if t.get("clinched") else ""
+    clinch      = f" {BOLD}{GREEN}{t['clinch']}{RESET}" if t.get("clinch") else ""
     print(
         f"   {GRAY}{rank:>2}{RESET}  "
         f"{abv_marker}{abv:<3}{RESET}  "
@@ -125,7 +130,7 @@ def render_wildcard(out=None) -> str:
             record  = f"{t['wins']}-{t['losses']}"
             div     = _short_division(t["division"])
             magic   = race_number(t.get("magic"))
-            clinch  = f" {BOLD}{GREEN}*{RESET}" if t.get("clinched") else ""
+            clinch  = f" {BOLD}{GREEN}{t['clinch']}{RESET}" if t.get("clinch") else ""
             print(
                 f"       {BOLD}{color}{abv:<3}{RESET}  "
                 f"{GRAY}{div:<10}{RESET}  "
@@ -150,6 +155,9 @@ def render_wildcard(out=None) -> str:
 
     p()
     p(f"  {GRAY}M# = division magic number · E# = wild-card elimination number{RESET}")
+    used = {t["clinch"] for race in races.values() for grp in ("leaders", "wildcard", "chasing") for t in race.get(grp, []) if t.get("clinch")}
+    if used:
+        p(f"  {GRAY}{' · '.join(f'{k} = {v}' for k, v in CLINCH_LABELS.items() if k in used)}{RESET}")
     p()
     return buf.getvalue()
 
@@ -169,6 +177,7 @@ def build_team_json(t: dict) -> dict:
         "wc_elim":         t["wc_elim"],
         "magic":           t["magic"],
         "clinched":        t["clinched"],
+        "clinch":          t["clinch"] or None,
     }
 
 

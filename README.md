@@ -131,7 +131,10 @@ From midseason on, `/standings` and `/wildcard` carry the pennant race:
 |---|---|
 | `M#` | Magic number — wins by this team plus losses by its closest chaser that clinch the division |
 | `E#` | Elimination number — games until the team is eliminated (`/wildcard` shows the wild-card version) |
-| `*` | Clinched a playoff berth |
+| `x` | Clinched a playoff berth |
+| `w` | Clinched a wild card |
+| `y` | Clinched the division |
+| `z` | Clinched the best record in the league |
 
 A `-` means the number doesn't apply — a trailing team has no magic number, a
 division leader has no elimination number. Both come straight from the MLB Stats
@@ -225,6 +228,7 @@ pip install -r requirements.txt
 python mlbsched.py
 python mlbsched.py NYY
 python mlbsched.py standings
+python mlbsched.py wildcard
 
 # Web server
 uvicorn server:app --port 8080
