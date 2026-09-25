@@ -391,7 +391,82 @@ def build_game_json(game: dict, user_lat: float | None = None, user_lon: float |
     }
 
 
+def schedule_json(request: Request, date_str: str, team_abv: str | None = None) -> dict:
+    """The JSON shape shared by every date-scoped schedule route."""
+    geo = geolocate_ip(get_client_ip(request))
+    user_lat = geo["lat"] if geo else None
+    user_lon = geo["lon"] if geo else None
+    tz = get_user_tz(geo)
+    team_id = sched.TEAMS[team_abv][0] if team_abv else None
+    data = sched.fetch_schedule(date_str, team_id)
+    games = [
+        build_game_json(g, user_lat, user_lon, tz)
+        for block in data.get("dates", [])
+        for g in block.get("games", [])
+    ]
+    out: dict = {"date": date_str, "games": games}
+    if team_abv:
+        out = {"team": team_abv, **out}
+    return out
+
+
+def next_game_json(request: Request, team_abv: str) -> dict:
+    geo = geolocate_ip(get_client_ip(request))
+    tz = get_user_tz(geo)
+    game = sched.fetch_next_game(sched.TEAMS[team_abv][0])
+    if game is None:
+        return {"team": team_abv, "date": today_et().isoformat(), "game": None}
+    g = build_game_json(game, geo["lat"] if geo else None, geo["lon"] if geo else None, tz)
+    official = game.get("officialDate") or (game.get("gameDate") or "")[:10]
+    g["official_date"] = official
+    g["game_date_utc"] = game.get("gameDate")
+    g["day_label"]     = sched.day_label(official)
+    g["countdown"]     = sched.countdown_label(game.get("gameDate", "")) or None
+    return {"team": team_abv, "date": today_et().isoformat(), "game": g}
+
+
+def _team_or_404(team: str) -> tuple[str, JSONResponse | None]:
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        return abv, JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
+    return abv, None
+
+
 # specific /api/* routes must be registered before /api/{team}
+@app.get("/api/yesterday")
+def api_yesterday(request: Request):
+    return JSONResponse(schedule_json(request, (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")))
+
+
+@app.get("/api/tomorrow")
+def api_tomorrow(request: Request):
+    return JSONResponse(schedule_json(request, (today_et() + timedelta(days=1)).strftime("%Y-%m-%d")))
+
+
+@app.get("/api/yesterday/{team}")
+def api_yesterday_team(request: Request, team: str):
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    return JSONResponse(schedule_json(request, (today_et() - timedelta(days=1)).strftime("%Y-%m-%d"), abv))
+
+
+@app.get("/api/tomorrow/{team}")
+def api_tomorrow_team(request: Request, team: str):
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    return JSONResponse(schedule_json(request, (today_et() + timedelta(days=1)).strftime("%Y-%m-%d"), abv))
+
+
+@app.get("/api/next/{team}")
+def api_next_team(request: Request, team: str):
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    return JSONResponse(next_game_json(request, abv))
+
+
 @app.get("/api/live")
 def api_live(request: Request):
     geo = geolocate_ip(get_client_ip(request))
@@ -727,20 +802,32 @@ def api_box_date(team: str, date_str: str):
 
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
-    abv = team.upper()
-    if abv not in sched.TEAMS:
-        return JSONResponse({"error": f"Unknown team: {abv}"}, status_code=404)
-    team_id = sched.TEAMS[abv][0]
-    data = sched.fetch_schedule(today_et().strftime("%Y-%m-%d"), team_id)
-    geo = geolocate_ip(get_client_ip(request))
-    user_lat = geo["lat"] if geo else None
-    user_lon = geo["lon"] if geo else None
-    tz = get_user_tz(geo)
-    games = []
-    for date_block in data.get("dates", []):
-        for game in date_block.get("games", []):
-            games.append(build_game_json(game, user_lat, user_lon, tz))
-    return JSONResponse({"team": abv, "date": today_et().isoformat(), "games": games})
+    """/api/NYM — today's game(s). Also /api/2026-04-20 — the whole slate that day."""
+    try:
+        d = sched.parse_date(team)
+        return JSONResponse(schedule_json(request, d.strftime("%Y-%m-%d")))
+    except ValueError:
+        pass
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    return JSONResponse(schedule_json(request, today_et().strftime("%Y-%m-%d"), abv))
+
+
+# Same two-segment shape as /api/box/{team} and /api/wp/{team}, so it must come
+# after them or it would swallow /api/box/NYM with team="box".
+@app.get("/api/{team}/{date_str}")
+def api_team_date(request: Request, team: str, date_str: str):
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    if date_str.lower() == "next":
+        return JSONResponse(next_game_json(request, abv))
+    try:
+        d = sched.parse_date(date_str)
+    except ValueError:
+        return JSONResponse({"error": f"Invalid date: {date_str}"}, status_code=404)
+    return JSONResponse(schedule_json(request, d.strftime("%Y-%m-%d"), abv))
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -1244,6 +1331,12 @@ def box_team_date(request: Request, team: str, date_str: str):
     return respond(request, sched.render_team_recap(d.strftime("%Y-%m-%d"), team.upper(), tz=tz, extra_per_game=wp.render_wp_for_game))
 
 
+@app.get("/next/{team}")
+def next_team(request: Request, team: str):
+    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+    return respond(request, sched.render_next_game(team, tz=tz), status_code=team_status(team))
+
+
 @app.get("/tomorrow/{team}")
 def tomorrow_team(request: Request, team: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
@@ -1261,6 +1354,8 @@ def team_date(request: Request, team: str, date_str: str):
             f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
         )
         return respond(request, msg, status_code=404)
+    if date_str.lower() == "next":
+        return respond(request, sched.render_next_game(abv, tz=tz))
     try:
         d = sched.parse_date(date_str)
     except ValueError:
