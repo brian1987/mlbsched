@@ -7,6 +7,7 @@ import time
 import asyncio
 import html as _html
 from contextlib import asynccontextmanager
+from functools import cache
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
@@ -49,7 +50,7 @@ _OG_IMAGE = Path(__file__).resolve().parent / "static" / "og.png"
 
 # Paths skipped by request logging. These also skip the cache/Vary defaults below,
 # so static + boilerplate responses keep whatever headers their handler set.
-_NO_LOG_PATHS = {"/favicon.ico", "/robots.txt", "/og.png"}
+_NO_LOG_PATHS = {"/favicon.ico", "/robots.txt", "/og.png", "/sitemap.xml"}
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -136,16 +137,96 @@ _ANSI_FG = {
 _ANSI_RE = re.compile(r"\033\[([0-9;]*)m")
 
 
-def ansi_to_html(content: str) -> str:
-    """Translate the renderer's ANSI color codes into HTML-escaped colored spans."""
+# ── Links in the browser view ─────────────────────────────────────────────────
+# The text views say where to go next ("Try: curl mlbsched.run/teams"); in a
+# browser those mentions become links. The host is always ours, every segment is
+# a plain [A-Za-z0-9_.-] run (so "//" can't happen), and the first segment has to
+# be a route we serve, a team, or a date. Text a renderer echoes back from the
+# request (a 404's "Unknown: …") therefore can't become a link to anywhere else.
+_LINK_SEG = r"(?:[A-Za-z0-9_.-]|<[A-Za-z]+>)+"
+_LINK_RE = re.compile(
+    rf"(?<![\w.@/-])(?P<scheme>(?:https?|webcal)://)?mlbsched\.run(?P<path>(?:/{_LINK_SEG})*/?)(?!/)"
+)
+_LINK_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+# Templated paths ("/lineup/<TEAM>") link to a worked example. Whole-path entries
+# first, for templates whose generic fill would mislead; None leaves them as text.
+_LINK_EXAMPLES = {
+    "/h2h/<TEAM>/<TEAM>": "/h2h/NYM/PHI",   # the same team twice is a 400
+    "/box/<TEAM>/<DATE>": None,             # today rarely has a final, and any fixed
+    "/wp/<TEAM>/<DATE>":  None,             # date is wrong on most pages that say this
+}
+_LINK_FILLS = {"TEAM": "NYM", "NAME": "lindor", "STAT": "ops", "YEAR": "2015"}  # DATE → today
+
+
+@cache
+def _link_roots() -> frozenset[str]:
+    """First path segments of the routes we serve ("standings", "box", "ical", …)."""
+    roots = {
+        getattr(r, "path", "").split("/")[1].lower()
+        for r in app.routes
+        if getattr(r, "path", "").count("/") >= 1
+    }
+    return frozenset(s for s in roots if s and "{" not in s) - {"metrics"}
+
+
+def _link_href(path: str) -> str | None:
+    """The page a mentioned path should open, or None to leave it as plain text."""
+    path = re.sub(r"<([A-Za-z]+)>", lambda m: f"<{m.group(1).upper()}>", path).rstrip("/") or "/"
+    path = _LINK_EXAMPLES.get(path, path)
+    if path is None:
+        return None
+    fills = {**_LINK_FILLS, "DATE": today_et().isoformat()}
+    unknown = False
+
+    def fill(m: re.Match) -> str:
+        nonlocal unknown
+        unknown = unknown or m.group(1) not in fills
+        return fills.get(m.group(1), "")
+
+    path = re.sub(r"<([A-Z]+)>", fill, path)
+    if unknown:
+        return None
+    first = path.split("/")[1]
+    if first and not (first.upper() in sched.TEAMS
+                      or _LINK_DATE_RE.fullmatch(first)
+                      or first.lower() in _link_roots()):
+        return None
+    return path
+
+
+def _link_spans(plain: str) -> list[tuple[int, int, str]]:
+    """(start, end, href) for each linkable mlbsched.run mention in ANSI-free text."""
+    spans = []
+    for m in _LINK_RE.finditer(plain):
+        path = m.group("path")
+        trimmed = path.rstrip(".")          # "…see mlbsched.run/teams." ends a sentence
+        href = _link_href(trimmed)
+        if href is None:
+            continue
+        if m.group("scheme") == "webcal://":
+            href = "webcal://mlbsched.run" + href    # one-click calendar subscribe
+        spans.append((m.start(), m.end() - (len(path) - len(trimmed)), href))
+    return spans
+
+
+def ansi_to_html(content: str, links: bool = True) -> str:
+    """Translate the renderer's ANSI color codes into HTML-escaped colored spans,
+    turning mlbsched.run/... mentions into links (which add no visible characters,
+    so the monospace layout is untouched)."""
     out: list[str] = []
     color: str | None = None
     bold = dim = False
+    opens: dict[int, str] = {}
+    closes: set[int] = set()
+    if links:
+        for start, end, href in _link_spans(_ANSI_RE.sub("", content)):
+            opens[start] = href
+            closes.add(end)
+    off = 0  # position in the ANSI-free text, where link spans are measured
 
-    def emit(chunk: str) -> None:
-        if not chunk:
-            return
-        esc = _html.escape(chunk)
+    def styled(piece: str) -> str:
+        esc = _html.escape(piece)
         styles = []
         if color:
             styles.append(f"color:{color}")
@@ -153,7 +234,27 @@ def ansi_to_html(content: str) -> str:
             styles.append("font-weight:bold")
         if dim:
             styles.append("opacity:0.6")
-        out.append(f'<span style="{";".join(styles)}">{esc}</span>' if styles else esc)
+        return f'<span style="{";".join(styles)}">{esc}</span>' if styles else esc
+
+    def emit(chunk: str) -> None:
+        # A mention can start or end mid-chunk, or run across a color change
+        # ("mlbsched.run/" + orange "NYM"), so cut the chunk at link edges and
+        # keep each <span> whole inside its <a>.
+        nonlocal off
+        if not chunk:
+            return
+        end = off + len(chunk)
+        cuts = sorted({p - off for p in (*opens, *closes) if off < p < end})
+        start = 0
+        for cut in (*cuts, len(chunk)):
+            at = off + start
+            if at in opens:
+                out.append(f'<a href="{_html.escape(opens[at])}">')
+            out.append(styled(chunk[start:cut]))
+            if off + cut in closes:
+                out.append("</a>")
+            start = cut
+        off = end
 
     pos = 0
     for m in _ANSI_RE.finditer(content):
@@ -225,6 +326,10 @@ def html_wrap(content: str, refresh_secs: int | None = None, path: str = "/") ->
               font-size: 15px; line-height: 1.6; white-space: pre; margin: 0;
               overflow-x: auto; -webkit-overflow-scrolling: touch; }}
     a      {{ color: #58a6ff; }}
+    /* Links in the text keep the terminal's colors; a faint underline marks them. */
+    pre a  {{ color: inherit; text-decoration: underline; text-decoration-thickness: 1px;
+              text-decoration-color: rgba(110, 118, 129, 0.55); text-underline-offset: 3px; }}
+    pre a:hover {{ text-decoration-color: #58a6ff; }}
     footer {{ color: #6e7681; font-family: 'Fira Mono', 'Courier New', monospace;
               font-size: 12px; margin-top: 1.5rem; padding-left: 2px; }}
     footer a {{ color: #6e7681; text-decoration: none; }}
@@ -879,12 +984,44 @@ def api_team_date(request: Request, team: str, date_str: str):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-_ROBOTS_TXT = "User-agent: *\nDisallow: /metrics\nDisallow: /api/\nAllow: /\n"
+_ROBOTS_TXT = (
+    "User-agent: *\nDisallow: /metrics\nDisallow: /api/\nAllow: /\n"
+    f"\nSitemap: {_SITE_URL}/sitemap.xml\n"
+)
 
 
 @app.get("/robots.txt")
 def robots_txt():
     return PlainTextResponse(_ROBOTS_TXT)
+
+
+# Pages worth a search engine's time: the stable views, every team, and each
+# /leaders stat. Left out: per-viewer pages (/distance), /random, dated and
+# historical permutations, and anything under /api/ (robots.txt disallows it).
+_SITEMAP_PAGES = (
+    "/", "/help", "/about", "/teams",
+    "/live", "/today", "/yesterday", "/tomorrow",
+    "/standings", "/wildcard", "/postseason",
+    "/pitchers", "/leaders", "/streaks",
+    "/broadcasts", "/weather", "/odds", "/bestbets",
+    "/ical", "/onthisday", "/birthdays", "/birthdays/all",
+)
+
+
+def render_sitemap() -> str:
+    paths = [*_SITEMAP_PAGES,
+             *(f"/{abv}" for abv in sorted(sched.TEAMS)),
+             *(f"/leaders/{stat}" for stat in leaders.ALL_STATS)]
+    urls = "".join(f"  <url><loc>{_html.escape(_SITE_URL + p)}</loc></url>\n" for p in paths)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            f"{urls}</urlset>\n")
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    return Response(render_sitemap(), media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/favicon.ico")
