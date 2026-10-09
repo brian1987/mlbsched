@@ -1,3 +1,5 @@
-requests>=2.31.0
-fastapi>=0.115.0
-uvicorn>=0.30.0
+# Pinned so every deploy ships the set the tests ran against. Dependabot
+# (.github/dependabot.yml) proposes bumps monthly; the test suite gates them.
+requests==2.34.2
+fastapi==0.141.1
+uvicorn==0.54.0
