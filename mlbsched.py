@@ -263,8 +263,9 @@ def _is_no_play(game: dict) -> bool:
 
 def fetch_next_game(team_id: int) -> dict | None:
     """The team's next game that isn't over: today's if it's still to come or in
-    progress, otherwise the first upcoming one within the window. None when
-    nothing is scheduled (offseason, or eliminated with the season done)."""
+    progress, otherwise the first upcoming one within the window. Past the window
+    (offseason, or eliminated with the season done) it's next season's Opening
+    Day; None only when MLB hasn't published that schedule yet."""
     now = time.monotonic()
     cached = _next_cache.get(team_id)
     if cached is not None and now - cached[0] < _NEXT_TTL_SECONDS:
@@ -295,8 +296,100 @@ def fetch_next_game(team_id: int) -> dict | None:
     )
     if game is not None:
         _enrich_probable_pitchers({"dates": [{"games": [game]}]})
+    else:
+        game = season_opener(team_id)   # season over: look ahead to Opening Day
     _next_cache[team_id] = (now, game)
     return game
+
+
+# ── Opening Day ───────────────────────────────────────────────────────────────
+# Past the window (the offseason, or a team whose season is over) the next game
+# is next season's opener. Spring training doesn't count: Opening Day is the first
+# regular-season game. A game months away barely changes, so cache 6h.
+_OPENER_TTL_SECONDS = 6 * 60 * 60
+_OPENER_SPAN_DAYS = 21     # league Opening Day to a team's own (overseas series open early)
+_opener_cache: dict[tuple[int, int], tuple[float, dict | None]] = {}   # (team_id, year) -> game
+
+
+def fetch_team_opener(team_id: int, year: int) -> dict | None:
+    """The team's first regular-season game of `year`, played or not; None if MLB
+    hasn't published that season. Never raises: Opening Day is extra context on
+    the next-game view, and an MLB hiccup there should read as nothing scheduled."""
+    key = (team_id, year)
+    now = time.monotonic()
+    cached = _opener_cache.get(key)
+    if cached is not None and now - cached[0] < _OPENER_TTL_SECONDS:
+        return cached[1]
+    opening = season_date(season_dates(year), "regularSeasonStartDate")
+    if opening is None:
+        return cached[1] if cached is not None else None
+    try:
+        resp = requests.get(
+            f"{MLB_API}/schedule",
+            params={
+                "sportId":   1,
+                "teamId":    team_id,
+                "gameType":  "R",
+                "startDate": opening.strftime("%Y-%m-%d"),
+                "endDate":   (opening + timedelta(days=_OPENER_SPAN_DAYS)).strftime("%Y-%m-%d"),
+                "hydrate":   "linescore,team,venue(location),probablePitcher",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return cached[1] if cached is not None else None
+    game = next(
+        (g for block in data.get("dates", []) for g in block.get("games", []) if not _is_no_play(g)),
+        None,
+    )
+    if game is not None:
+        _enrich_probable_pitchers({"dates": [{"games": [game]}]})
+    _opener_cache[key] = (now, game)
+    return game
+
+
+def _official_date(game: dict) -> date | None:
+    try:
+        return datetime.strptime(game.get("officialDate") or (game.get("gameDate") or "")[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def days_until(game: dict, today: date | None = None) -> int | None:
+    """Calendar days (ET) from today to the game's official date."""
+    d = _official_date(game)
+    return (d - (today or today_et())).days if d else None
+
+
+def season_opener(team_id: int, next_game: dict | None = None) -> dict | None:
+    """The team's upcoming Opening Day game while there's one to look forward to:
+    through the offseason and spring training, and on Opening Day itself. None once
+    its regular season is underway, or while it's playing in the postseason.
+
+    `next_game` is what fetch_next_game found in its window (None if nothing)."""
+    today = today_et()
+    gtype = next_game.get("gameType") if next_game else None
+    if next_game is None or gtype in ("S", "E"):
+        # This year's opener until the regular season ends, then next year's.
+        reg_end = season_date(season_dates(today.year), "regularSeasonEndDate")
+        year = today.year + 1 if reg_end and today > reg_end else today.year
+        opener = fetch_team_opener(team_id, year)
+        # An opener already played (a team back home for exhibitions after an
+        # overseas series) isn't one to count down to.
+        if opener is None or (days_until(opener, today) or 0) < 0:
+            return None
+        return opener
+    if gtype == "R":
+        # Is the next game itself the opener? Only worth asking near Opening Day.
+        d = _official_date(next_game)
+        opening = season_date(season_dates(d.year), "regularSeasonStartDate") if d else None
+        if opening and d <= opening + timedelta(days=_OPENER_SPAN_DAYS):
+            opener = fetch_team_opener(team_id, d.year)
+            if opener and opener.get("gamePk") == next_game.get("gamePk"):
+                return next_game   # the live copy, not the 6h-cached one
+    return None
 
 
 def countdown_label(gt_str: str, now: datetime | None = None) -> str:
@@ -358,21 +451,37 @@ def render_next_game(team_abv: str, out=None, tz: ZoneInfo | None = None) -> str
         p()
         return buf.getvalue()
 
+    opener = season_opener(team_id, game)
+    is_opener = opener is not None and opener.get("gamePk") == game.get("gamePk")
     _render_game_line(game, _out, tz=tz)
 
     when = day_label(game.get("officialDate") or game.get("gameDate", "")[:10])
     bits = [when] if when else []
+    if is_opener:
+        bits.insert(0, f"{CYAN}Opening Day {_official_date(game).year}{RESET}{GRAY}")
     loc = game_location(game)
     if loc:
         home_abv = abv_from_id(game["teams"]["home"]["team"]["id"])
         bits.append(loc[0] if home_abv == abv else f"{loc[0]} (at {home_abv})")
+    n = days_until(game)
     if game["status"]["abstractGameState"] == "Live":
         bits.append(f"{GREEN}in progress{RESET}{GRAY}")
+    elif is_opener and n is not None and n > 1:
+        bits.append(f"in {n} days")
     elif not game["status"].get("startTimeTBD"):
         cd = countdown_label(game.get("gameDate", ""))
         if cd:
             bits.append(f"first pitch {cd}")
     p(f"  {GRAY}{' · '.join(bits)}{RESET}")
+
+    if opener is not None and not is_opener:
+        # Spring training: the next game is an exhibition; the opener is the date that matters.
+        od = _official_date(opener)
+        home_abv = abv_from_id(opener["teams"]["home"]["team"]["id"])
+        away_abv = abv_from_id(opener["teams"]["away"]["team"]["id"])
+        matchup = f"vs {away_abv}" if home_abv == abv else f"@ {home_abv}"
+        p(f"  {CYAN}Opening Day {od.year}:{RESET} {GRAY}{od:%A, %B %-d} {matchup} · "
+          f"{_days_until(od, today_et())}{RESET}")
     p()
     return buf.getvalue()
 
@@ -392,7 +501,10 @@ def fetch_standings() -> dict:
     try:
         resp = requests.get(
             f"{MLB_API}/standings",
-            params={"leagueId": "103,104", "standingsTypes": "regularSeason", "hydrate": "team,division"},
+            # Pinned to the stats season: from the winter until Opening Day, MLB's
+            # default can be next season's empty table instead of the final one.
+            params={"leagueId": "103,104", "standingsTypes": "regularSeason", "hydrate": "team,division",
+                    "season": stats_season()},
             timeout=10,
         )
         resp.raise_for_status()
@@ -1223,7 +1335,9 @@ def build_standings_json() -> dict:
             "league":   LEAGUE_NAMES.get(league_id),
             "teams":    rows,
         })
-    return {"divisions": divisions}
+    season = next((str(t.get("season") or "") for r in data.get("records", [])
+                   for t in r.get("teamRecords", [])), "")
+    return {"season": int(season) if season.isdigit() else None, "divisions": divisions}
 
 
 def build_team_list_json() -> dict:

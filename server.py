@@ -552,18 +552,36 @@ def schedule_json(request: Request, date_str: str, team_abv: str | None = None) 
 
 
 def next_game_json(request: Request, team_abv: str) -> dict:
+    """`game` is the next game (next season's Opening Day once the team's season is
+    over). `season_opener` is the upcoming Opening Day game through the offseason
+    and spring training, and null once the regular season is underway."""
     geo = geolocate_ip(get_client_ip(request))
     tz = get_user_tz(geo)
-    game = sched.fetch_next_game(sched.TEAMS[team_abv][0])
+    team_id = sched.TEAMS[team_abv][0]
+    game = sched.fetch_next_game(team_id)
     if game is None:
-        return {"team": team_abv, "date": today_et().isoformat(), "game": None}
-    g = build_game_json(game, geo["lat"] if geo else None, geo["lon"] if geo else None, tz)
-    official = game.get("officialDate") or (game.get("gameDate") or "")[:10]
-    g["official_date"] = official
-    g["game_date_utc"] = game.get("gameDate")
-    g["day_label"]     = sched.day_label(official)
-    g["countdown"]     = sched.countdown_label(game.get("gameDate", "")) or None
-    return {"team": team_abv, "date": today_et().isoformat(), "game": g}
+        return {"team": team_abv, "date": today_et().isoformat(), "game": None, "season_opener": None}
+    opener = sched.season_opener(team_id, game)
+
+    def detail(gm: dict) -> dict:
+        g = build_game_json(gm, geo["lat"] if geo else None, geo["lon"] if geo else None, tz)
+        official = gm.get("officialDate") or (gm.get("gameDate") or "")[:10]
+        g["official_date"] = official
+        g["game_date_utc"] = gm.get("gameDate")
+        g["day_label"]     = sched.day_label(official)
+        # A TBD start carries a placeholder time (3:33 AM ET); don't count down to it.
+        tbd = (gm.get("status") or {}).get("startTimeTBD")
+        g["countdown"]     = None if tbd else (sched.countdown_label(gm.get("gameDate", "")) or None)
+        g["days_until"]    = sched.days_until(gm)
+        g["opening_day"]   = opener is not None and gm.get("gamePk") == opener.get("gamePk")
+        return g
+
+    return {
+        "team": team_abv,
+        "date": today_et().isoformat(),
+        "game": detail(game),
+        "season_opener": detail(opener) if opener is not None else None,
+    }
 
 
 def _team_or_404(team: str) -> tuple[str, JSONResponse | None]:

@@ -181,6 +181,42 @@
     text-align: center;
   }
 
+  /* Offseason: last season's record + Opening Day countdown */
+  .mets-offseason {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-around;
+    gap: 0.75rem;
+    text-align: center;
+  }
+
+  .mets-off-col { flex: 1; }
+
+  .mets-off-col + .mets-off-col {
+    border-left: 1px solid rgba(255,255,255,0.15);
+  }
+
+  .mets-off-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.6;
+  }
+
+  .mets-off-big {
+    font-size: 2.2rem;
+    font-weight: 900;
+    line-height: 1.15;
+  }
+
+  .mets-off-big.accent { color: #ff5910; }
+
+  .mets-off-sub {
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+
   /* Footer */
   .mets-footer {
     margin-top: 1.1rem;
@@ -243,9 +279,12 @@
 (function() {
   // Today's Mets game. On an off day the widget falls back to last night's
   // final (/api/box/NYM defaults to yesterday) and the next scheduled game.
-  const API_TODAY = 'https://mlbsched.run/api/NYM';
-  const API_LAST  = 'https://mlbsched.run/api/box/NYM';
-  const API_NEXT  = 'https://mlbsched.run/api/next/NYM';
+  // In the offseason it shows last season's record and counts down to Opening Day.
+  const TEAM = 'NYM';
+  const API_TODAY     = 'https://mlbsched.run/api/NYM';
+  const API_LAST      = 'https://mlbsched.run/api/box/NYM';
+  const API_NEXT      = 'https://mlbsched.run/api/next/NYM';
+  const API_STANDINGS = 'https://mlbsched.run/api/standings';
 
   function scoreboard(g, status, statusClass) {
     const awayWin = g.away_score > g.home_score;
@@ -272,9 +311,67 @@
   function nextLine(next) {
     const g = next && next.game;
     if (!g) return '';
-    const opp = g.home === 'NYM' ? `vs ${g.away}` : `@ ${g.home}`;
+    const opp = g.home === TEAM ? `vs ${g.away}` : `@ ${g.home}`;
+    if (g.opening_day) {
+      return `<div class="mets-next">Opening Day: ${shortDate(g.official_date)} ${opp} · ${daysLabel(g.days_until)}</div>`;
+    }
     const when = [g.day_label, g.game_time || 'TBD'].filter(Boolean).join(' · ');
     return `<div class="mets-next">Next: ${when} ${opp}</div>`;
+  }
+
+  // '2027-03-25' → 'Thu, Mar 25' (built as a local date, so no timezone drift)
+  function shortDate(iso) {
+    const [y, m, d] = (iso || '').split('-').map(Number);
+    if (!y) return '';
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  function daysLabel(n) {
+    if (n === 0) return 'today';
+    if (n === 1) return 'tomorrow';
+    return `${n} days`;
+  }
+
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  // The team's final line in /api/standings → { season, wins, losses, place }
+  function finalRecord(standings) {
+    for (const div of (standings && standings.divisions) || []) {
+      const t = div.teams.find(x => x.team === TEAM);
+      if (t && (t.wins || t.losses)) {
+        const division = (div.division || '').replace('American League', 'AL').replace('National League', 'NL');
+        return { season: standings.season, wins: t.wins, losses: t.losses,
+                 place: t.rank ? `${ordinal(t.rank)} · ${division}` : division };
+      }
+    }
+    return null;
+  }
+
+  let offseasonRecord = null;
+
+  function renderOffseason(opener, rec) {
+    const body = document.getElementById('mets-body');
+    const opp = opener.home === TEAM ? `vs ${opener.away}` : `@ ${opener.home}`;
+    const n = opener.days_until;
+    const openerYear = Number((opener.official_date || '').slice(0, 4));
+    const season = (rec && rec.season) || (openerYear ? openerYear - 1 : '');
+    const recordCol = rec ? `
+          <div class="mets-off-col">
+            <div class="mets-off-label">${season} Final</div>
+            <div class="mets-off-big">${rec.wins}-${rec.losses}</div>
+            <div class="mets-off-sub">${rec.place}</div>
+          </div>` : '';
+    body.innerHTML = `
+        <div class="mets-offseason">${recordCol}
+          <div class="mets-off-col">
+            <div class="mets-off-label">Opening Day${openerYear ? ' ' + openerYear : ''}</div>
+            <div class="mets-off-big accent">${n > 1 ? n : (n === 1 ? 'Tomorrow' : 'Today')}</div>
+            <div class="mets-off-sub">${n > 1 ? 'days · ' : ''}${shortDate(opener.official_date)} ${opp}</div>
+          </div>
+        </div>`;
   }
 
   function render(games) {
@@ -306,6 +403,19 @@
     const g = last && last.games && last.games.find(x => x.status === 'Final');
     if (g) {
       body.innerHTML = scoreboard(g, 'Final · Yesterday') + nextLine(next);
+      return;
+    }
+    // Season over: no final last night, and the API names an upcoming Opening Day.
+    // (An API without season_opener falls through to the plain off-day card.)
+    const opener = next && next.season_opener;
+    if (opener) {
+      renderOffseason(opener, offseasonRecord);   // last known record: no flicker on refresh
+      getJSON(API_STANDINGS)
+        .then(st => {
+          const rec = finalRecord(st);
+          if (rec) { offseasonRecord = rec; renderOffseason(opener, rec); }
+        })
+        .catch(() => {});
       return;
     }
     const upcoming = nextLine(next);
