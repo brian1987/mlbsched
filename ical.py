@@ -5,15 +5,20 @@ so a team's games appear automatically and refresh on their own. One VEVENT per
 game, with UID keyed on the MLB gamePk so a rescheduled game updates in place
 instead of duplicating. Times are emitted in UTC; the calendar client converts
 to the viewer's local zone, so the feed is identical for everyone and safely
-shareable in a cache."""
+shareable in a cache.
+
+Calendar apps treat a subscribed feed as the whole truth: an event that drops out
+of the feed is deleted from the subscriber's calendar. So the feed carries last
+season alongside next season through the winter (see feed_seasons), and an MLB
+outage answers 503 rather than an empty calendar."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
-from mlbsched import MLB_API, TEAMS, schedule_season
+from mlbsched import MLB_API, TEAMS, schedule_season, stats_season, today_et
 
 # Baseball has no fixed end; block out a sensible window so the event reads well.
 _GAME_DURATION = timedelta(hours=3)
@@ -39,6 +44,41 @@ def _fetch_season_games(team_id: int, year: int) -> list[dict]:
     games: list[dict] = []
     for d in resp.json().get("dates", []):
         games.extend(d.get("games", []))
+    return games
+
+
+# (team_id, season) -> games. A season whose postseason is over never changes, so
+# it's fetched once per process. The live season is refetched on every request,
+# and its last good copy is what an MLB hiccup gets served instead.
+_season_games_cache: dict[tuple[int, int], list[dict]] = {}
+
+
+def feed_seasons(today: date | None = None) -> list[int]:
+    """The seasons a subscriber's calendar should hold: the one being played (or
+    next up), plus last season until the new one's Opening Day.
+
+    In season that's one year. Once MLB's postseason window closes,
+    schedule_season() moves to next year while stats_season() stays on the one
+    just played, so through the winter the feed has both; on Opening Day
+    stats_season() catches up and last season drops out. Flipping straight to next
+    year would wipe every subscriber's season from their calendar overnight."""
+    today = today or today_et()
+    return sorted({stats_season(today), schedule_season(today)})
+
+
+def _season_games(team_id: int, year: int, finished: bool) -> list[dict]:
+    """A team's games for one season. Raises requests.RequestException only when
+    MLB is down and there's no earlier copy to fall back on."""
+    key = (team_id, year)
+    if finished and _season_games_cache.get(key):
+        return _season_games_cache[key]
+    try:
+        games = _fetch_season_games(team_id, year)
+    except requests.RequestException:
+        if key in _season_games_cache:
+            return _season_games_cache[key]
+        raise
+    _season_games_cache[key] = games
     return games
 
 
@@ -149,18 +189,25 @@ def _event(game: dict, abv: str, dtstamp: str) -> list[str]:
     return out
 
 
-def render_ical(team_abv: str) -> str | None:
-    """The full VCALENDAR text for a team's season, or None for an unknown team."""
+def render_ical(team_abv: str, today: date | None = None) -> str | None:
+    """The full VCALENDAR text for a team's schedule, or None for an unknown team.
+
+    If MLB is unreachable and a season has never been fetched, the
+    requests.RequestException propagates (the server answers 503). An empty
+    calendar would tell every subscriber's app to delete the team's games, while a
+    503 leaves what they already have in place until the next refresh."""
     abv = team_abv.upper()
     if abv not in TEAMS:
         return None
     team_id, full_name, _color = TEAMS[abv]
-    year = schedule_season()
-    try:
-        games = _fetch_season_games(team_id, year)
-    except requests.RequestException:
-        games = []  # serve an empty-but-valid calendar rather than erroring the client
+    today = today or today_et()
+    years = feed_seasons(today)
+    live = schedule_season(today)
+    for key in [k for k in _season_games_cache if k[0] == team_id and k[1] not in years]:
+        del _season_games_cache[key]   # a season that has left the feed
+    games = [g for y in years for g in _season_games(team_id, y, finished=y < live)]
     dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    span = f"{years[0]}–{years[-1]}" if len(years) > 1 else str(years[0])
 
     lines = [
         "BEGIN:VCALENDAR",
@@ -169,7 +216,7 @@ def render_ical(team_abv: str) -> str | None:
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ics_escape(full_name)}",
-        f"X-WR-CALDESC:{_ics_escape(f'{full_name} {year} schedule — mlbsched.run')}",
+        f"X-WR-CALDESC:{_ics_escape(f'{full_name} {span} schedule — mlbsched.run')}",
         "X-WR-TIMEZONE:UTC",
         "REFRESH-INTERVAL;VALUE=DURATION:PT12H",
         "X-PUBLISHED-TTL:PT12H",
@@ -191,7 +238,9 @@ def render_index() -> str:
         [
             "",
             "  Subscribe to a team's full schedule in any calendar app — games",
-            "  appear automatically and refresh on their own:",
+            "  appear automatically and refresh on their own. Over the winter the",
+            "  feed holds last season and next; last season's games stay until",
+            "  the new Opening Day.",
             "",
             "      https://mlbsched.run/ical/<TEAM>.ics",
             "",

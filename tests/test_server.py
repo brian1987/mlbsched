@@ -93,12 +93,26 @@ def test_help_about_random_offline(client):
 
 def test_ical_route_shape(client, monkeypatch):
     import ical
+    monkeypatch.setattr(ical, "_season_games_cache", {})
     monkeypatch.setattr(ical, "_fetch_season_games", lambda tid, y: [])
     r = client.get("/ical/NYM.ics")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/calendar")
     assert r.headers["cache-control"] == "public, max-age=1800"
     assert client.get("/ical/ZZZ.ics").status_code == 404
+
+
+def test_ical_outage_answers_503_not_an_empty_calendar(client, monkeypatch):
+    # An empty feed would make calendar apps delete the team's games; a 503 keeps them.
+    import ical
+    import requests
+
+    def down(team_id, year):
+        raise requests.ConnectionError("MLB down")
+    monkeypatch.setattr(ical, "_season_games_cache", {})
+    monkeypatch.setattr(ical, "_fetch_season_games", down)
+    r = client.get("/ical/NYM.ics", headers=CURL)
+    assert r.status_code == 503 and r.headers["retry-after"] == "30"
 
 
 def test_client_ip_prefers_forwarded(client):
