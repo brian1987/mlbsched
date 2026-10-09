@@ -1241,7 +1241,7 @@ def metrics(request: Request, days: int = 30):
         )
     days = max(1, min(days, 365))
 
-    daily = db.query("""
+    daily = db.query(f"""
         SELECT date,
                COUNT(*)                              AS total,
                COUNT(DISTINCT ip_hash)               AS uniq,
@@ -1249,6 +1249,7 @@ def metrics(request: Request, days: int = 30):
                SUM(client = 'browser')               AS browser_ct
         FROM   requests
         WHERE  date >= date('now', ?)
+               {_BOT_FILTER_SQL}
         GROUP  BY date
         ORDER  BY date DESC
     """, (f"-{days} days",))
@@ -1345,6 +1346,7 @@ def metrics(request: Request, days: int = 30):
     lines.append(f"Total requests : {total_row['total']}  (real: {real_total}, bots: {bot_total_row['total']})")
     lines.append(f"Unique IPs     : {total_row['uniq']}")
     lines.append("")
+    lines.append("Daily (bot scanners filtered)")
     lines.append(f"{'Date':<12} {'Requests':>9} {'Unique':>7} {'curl':>6} {'Browser':>8}")
     lines.append("-" * 46)
     for r in daily:
