@@ -28,6 +28,7 @@ curl mlbsched.run/yesterday
 curl mlbsched.run/yesterday/NYM
 
 # A team's next game (today's if it hasn't finished), with a countdown to first pitch
+# — once its season is over, next season's Opening Day
 curl mlbsched.run/NYM/next
 
 # Live scores (auto-refresh in browser)
