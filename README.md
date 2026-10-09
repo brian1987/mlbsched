@@ -257,6 +257,10 @@ python -m pytest -q
 
 Every push to `main` runs the tests before the Fly deploy; pull requests run them on their own.
 
+A daily smoke test checks the live site (key routes, plus the TLS certs at both
+Cloudflare's edge and the Fly origin) and opens a `smoke-test` issue when
+something breaks. Run it by hand with `tools/smoke.sh`.
+
 ## Deploy Your Own
 
 Requires [flyctl](https://fly.io/docs/hands-on/install-flyctl/).
