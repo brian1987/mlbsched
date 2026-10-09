@@ -1,0 +1,20 @@
+# Monthly dependency bumps. Minor and patch releases are grouped into one PR per
+# ecosystem; a major release gets its own. Every PR runs the test suite, and
+# nothing reaches Fly until it's merged.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
