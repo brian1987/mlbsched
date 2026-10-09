@@ -389,6 +389,25 @@ def test_ical_winter_calendar_carries_both_seasons(winter):
     assert (121, 2026) not in ical._season_games_cache          # dropped once out of the feed
 
 
+def test_ical_rainout_and_makeup_become_one_event(monkeypatch, winter):
+    def game(pk, when, state):
+        return {"gamePk": pk, "officialDate": when[:10], "gameDate": when,
+                "status": {"detailedState": state},
+                "teams": {"away": {"team": {"name": "Atlanta Braves"}}, "home": {"team": {"name": "New York Mets"}}}}
+    rainout = game(9, "2026-04-25T20:10:00Z", "Postponed")
+    makeup = game(9, "2026-04-26T17:45:00Z", "Final")
+    other = game(10, "2026-04-27T23:10:00Z", "Scheduled")
+    assert ical._one_per_game([rainout, makeup, other]) == [makeup, other]
+    assert ical._one_per_game([makeup, rainout, other]) == [makeup, other]   # order-independent
+    later = game(9, "2026-05-02T17:45:00Z", "Postponed")                    # called off twice
+    assert ical._one_per_game([rainout, later]) == [later]
+
+    monkeypatch.setattr(ical, "_fetch_season_games", lambda tid, y: [rainout, makeup, other])
+    cal = ical.render_ical("NYM", today=date(2026, 7, 1))
+    assert cal.count("UID:mlb-9@mlbsched.run") == 1
+    assert "DTSTART:20260426T174500Z" in cal and "STATUS:CANCELLED" not in cal
+
+
 def test_ical_outage_never_serves_an_empty_calendar(monkeypatch, winter):
     import requests
     ical.render_ical("NYM", today=date(2026, 7, 1))              # a good copy to fall back on

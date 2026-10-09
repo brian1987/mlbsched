@@ -126,6 +126,26 @@ def _vstatus(detailed: str, tbd: bool) -> str:
     return "TENTATIVE" if tbd else "CONFIRMED"
 
 
+def _one_per_game(games: list[dict]) -> list[dict]:
+    """One entry per gamePk, since each becomes a UID and RFC 5545 wants them unique.
+
+    MLB lists a postponed (or suspended) game twice under the same gamePk: the
+    rained-out entry on the original date and the makeup on the new one. Keep the
+    entry that's actually played; if every entry was called off, keep the latest.
+    Order follows MLB's (by date)."""
+    def rank(g: dict) -> tuple[bool, str]:
+        detailed = (g.get("status") or {}).get("detailedState", "")
+        return _vstatus(detailed, False) != "CANCELLED", g.get("gameDate") or ""
+
+    best: dict = {}
+    for g in games:
+        key = g.get("gamePk") or id(g)
+        if key not in best or rank(g) >= rank(best[key]):
+            best[key] = g
+    keep = {id(g) for g in best.values()}
+    return [g for g in games if id(g) in keep]
+
+
 def _location(venue: dict) -> str:
     name = venue.get("name", "")
     loc = venue.get("location", {}) or {}
@@ -205,7 +225,9 @@ def render_ical(team_abv: str, today: date | None = None) -> str | None:
     live = schedule_season(today)
     for key in [k for k in _season_games_cache if k[0] == team_id and k[1] not in years]:
         del _season_games_cache[key]   # a season that has left the feed
-    games = [g for y in years for g in _season_games(team_id, y, finished=y < live)]
+    games = _one_per_game(
+        [g for y in years for g in _season_games(team_id, y, finished=y < live)]
+    )
     dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     span = f"{years[0]}–{years[-1]}" if len(years) > 1 else str(years[0])
 
