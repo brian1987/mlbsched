@@ -8,6 +8,8 @@ import os
 import re
 import tempfile
 
+from datetime import date
+
 import pytest
 import requests
 
@@ -239,13 +241,40 @@ def test_render_world_series_champion(monkeypatch):
 
 
 def test_render_empty_and_unreachable(monkeypatch):
+    monkeypatch.setattr(postseason, "today_et", lambda: date(2026, 10, 9))
     monkeypatch.setattr(postseason, "fetch_postseason", lambda season: {"series": []})
-    assert "No postseason schedule published for 2027 yet." in plain(postseason.render_postseason(2027))
+    assert "No postseason schedule published for 2026 yet." in plain(postseason.render_postseason(2026))
+    assert "No postseason was played in 1994." in plain(postseason.render_postseason(1994))
 
+    # The renderer no longer swallows an outage; the server maps it to a 503.
     def down(season):
         raise requests.ConnectionError("down")
     monkeypatch.setattr(postseason, "fetch_postseason", down)
-    assert "Could not reach MLB API." in plain(postseason.render_postseason(2026))
+    with pytest.raises(requests.ConnectionError):
+        postseason.render_postseason(2026)
+
+
+def _published_through(last_year):
+    """fetch_postseason with a decided bracket for every season up to last_year."""
+    return lambda season: {"series": [ws_decided()]} if season <= last_year else {"series": []}
+
+
+def test_bare_postseason_falls_back_to_last_season(monkeypatch):
+    monkeypatch.setattr(postseason, "today_et", lambda: date(2027, 1, 15))
+    monkeypatch.setattr(postseason, "fetch_postseason", _published_through(2026))
+    assert postseason.default_season() == (2026, True)
+    out = plain(postseason.render_postseason())
+    assert "MLB Postseason — 2026" in out
+    assert "The 2027 bracket isn't set yet — showing 2026." in out
+    assert postseason.build_postseason_json()["season"] == 2026
+
+
+def test_bare_postseason_uses_this_season_once_published(monkeypatch):
+    monkeypatch.setattr(postseason, "today_et", lambda: date(2027, 10, 1))
+    monkeypatch.setattr(postseason, "fetch_postseason", _published_through(2027))
+    assert postseason.default_season() == (2027, False)
+    out = plain(postseason.render_postseason())
+    assert "MLB Postseason — 2027" in out and "isn't set yet" not in out
 
 
 # ── fetch_postseason cache ────────────────────────────────────────────────────
@@ -347,10 +376,23 @@ def test_postseason_unknown_season_is_404(client, season):
     assert r.status_code == 404 and "Unknown season" in plain(r.text)
 
 
-@pytest.mark.xfail(strict=True, reason="render_postseason swallows the upstream error, so "
-                   "/postseason answers 200 when MLB is down; /api/postseason answers 503")
 def test_postseason_text_upstream_down_is_503(client, monkeypatch):
     def down(season):
         raise requests.ConnectionError("down")
     monkeypatch.setattr(postseason, "fetch_postseason", down)
-    assert client.get("/postseason/2026", headers=CURL).status_code == 503
+    for path in ("/postseason/2026", "/postseason"):
+        r = client.get(path, headers=CURL)
+        assert r.status_code == 503 and r.headers["retry-after"] == "30", path
+    assert client.get("/api/postseason", headers=CURL).status_code == 503
+
+
+@pytest.mark.parametrize("season", [1902, 2999])
+def test_api_postseason_unknown_season_is_404(client, season):
+    r = client.get(f"/api/postseason/{season}")
+    assert r.status_code == 404 and r.json() == {"error": f"Unknown season: {season}"}
+
+
+def test_api_postseason_season_without_a_postseason_is_empty(client, monkeypatch):
+    monkeypatch.setattr(postseason, "fetch_postseason", lambda season: {"series": []})
+    r = client.get("/api/postseason/1994")
+    assert r.status_code == 200 and r.json()["series"] == []
