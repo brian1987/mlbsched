@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests as _requests
@@ -36,6 +36,7 @@ import ical
 import pitchers
 import about
 import postseason
+import watch
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -847,6 +848,17 @@ def api_box_date(team: str, date_str: str):
     return JSONResponse(data, status_code=404 if "error" in data else 200)
 
 
+@app.get("/api/watch/{team}")
+def api_watch(team: str):
+    abv, err = _team_or_404(team)
+    if err:
+        return err
+    game = watch.find_game(abv)
+    if game is None:
+        return {"team": abv, "game": None}
+    return {"team": abv, "game": watch.snapshot(watch.fetch_feed(game["gamePk"]), game)}
+
+
 @app.get("/api/{team}")
 def api_team(request: Request, team: str):
     """/api/NYM — today's game(s). Also /api/2026-04-20 — the whole slate that day."""
@@ -928,6 +940,79 @@ def tomorrow(request: Request):
 def live(request: Request):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
     return respond(request, sched.render_live(tz=tz), refresh_secs=30)
+
+
+# ── /watch: a live game redrawn in place ──────────────────────────────────────
+# curl gets a long-lived text stream; no-transform keeps Cloudflare from
+# compressing (and so buffering) it, X-Accel-Buffering keeps any proxy from holding frames.
+_STREAM_HEADERS = {"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"}
+
+
+def _viewer_tz(request: Request) -> ZoneInfo | None:
+    return get_user_tz(geolocate_ip(get_client_ip(request)))
+
+
+@app.get("/watch")
+def watch_index(request: Request):
+    return respond(request, watch.render_index(tz=_viewer_tz(request)), refresh_secs=60)
+
+
+@app.get("/watch/{team}")
+async def watch_team(request: Request, team: str, once: bool = False):
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        msg = (
+            f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/watch{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
+    tz = await asyncio.to_thread(_viewer_tz, request)
+    game = await asyncio.to_thread(watch.find_game, abv)
+    if game is None:
+        msg = (
+            f"\n  {sched.GRAY}No {abv} game on the schedule to watch.{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/{abv}/next{sched.RESET}\n"
+        )
+        return respond(request, msg)
+    snap = watch.snapshot(await watch.fetch_feed_async(game["gamePk"]), game)
+    if not is_curl(request):
+        frame = watch.render_frame(snap, tz=tz, mode="browser")
+        return respond(request, frame, refresh_secs=None if watch.is_over(snap) else 10)
+    if once or not watch.worth_streaming(snap) or watch.active_streams() >= watch.MAX_STREAMS:
+        frame = watch.render_frame(snap, tz=tz, mode="once")
+        if not once and not watch.is_over(snap):
+            if watch.active_streams() >= watch.MAX_STREAMS:
+                frame += f"  {sched.GRAY}Lots of people watching right now — this is a snapshot. Try again in a minute.{sched.RESET}\n"
+            else:
+                frame += (f"  {sched.GRAY}The live screen opens 3 hours before first pitch — "
+                          f"come back then: curl mlbsched.run/watch/{abv}{sched.RESET}\n\n")
+        return PlainTextResponse(frame)
+    return StreamingResponse(
+        watch.stream(game, tz, request.is_disconnected),
+        media_type="text/plain; charset=utf-8",
+        headers=_STREAM_HEADERS,
+    )
+
+
+@app.get("/replay/{game_pk}")
+async def replay_game(request: Request, game_pk: int, speed: float = 1.0, start: int = 0):
+    game = await asyncio.to_thread(watch.find_game_by_pk, game_pk)
+    if game is None:
+        return respond(request, f"\n  {sched.RED}No game with id {game_pk}{sched.RESET}\n", status_code=404)
+    if game["status"]["abstractGameState"] != "Final":
+        home = sched.team_label(game["teams"]["home"]["team"])
+        msg = f"\n  {sched.GRAY}That game isn't over yet — watch it live: curl mlbsched.run/watch/{home}{sched.RESET}\n"
+        return respond(request, msg, status_code=400)
+    if not is_curl(request):
+        msg = f"\n  {sched.GRAY}Replays play in the terminal: curl mlbsched.run/replay/{game_pk}{sched.RESET}\n"
+        return respond(request, msg)
+    tz = await asyncio.to_thread(_viewer_tz, request)
+    return StreamingResponse(
+        watch.replay(game_pk, game, tz, request.is_disconnected,
+                     speed=min(max(speed, 0.25), 10.0), start=max(start, 0)),
+        media_type="text/plain; charset=utf-8",
+        headers=_STREAM_HEADERS,
+    )
 
 
 @app.get("/distance")
