@@ -8,7 +8,7 @@ import requests
 
 from mlbsched import (
     BOLD, DIM, RESET, RED, YELLOW, CYAN, WHITE, GRAY,
-    TEAMS, MLB_API, abv_from_id, team_color, today_et,
+    TEAMS, MLB_API, abv_from_id, team_color, stats_season,
 )
 
 # 1-hour TTL cache for the all-players roster
@@ -219,7 +219,7 @@ def render_player(query: str, out=None) -> str:
     def p(s=""):
         print(s, file=_out)
 
-    season = today_et().year
+    season = stats_season()
     matches, best = find_player(query, season)
 
     if not matches:
@@ -281,7 +281,7 @@ def render_player(query: str, out=None) -> str:
 
 
 def build_player_json(query: str) -> dict:
-    season = today_et().year
+    season = stats_season()
     matches, best = find_player(query, season)
     if not matches:
         return {"query": query, "matches": [], "player": None}

@@ -241,7 +241,13 @@ python mlbsched.py wildcard
 # Web server
 uvicorn server:app --port 8080
 curl http://localhost:8080/NYY
+
+# Tests (offline — MLB calls are stubbed)
+pip install -r requirements-dev.txt
+python -m pytest -q
 ```
+
+Every push to `main` runs the tests before the Fly deploy; pull requests run them on their own.
 
 ## Deploy Your Own
 

@@ -2,8 +2,11 @@
 
 import os
 import re
+import hmac
 import time
+import asyncio
 import html as _html
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as _UTC
 from fastapi import FastAPI, Request, Response
@@ -34,11 +37,13 @@ import pitchers
 import about
 import postseason
 
-app = FastAPI(docs_url=None, redoc_url=None)
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     db.init_db()
+    yield
+
+
+app = FastAPI(docs_url=None, redoc_url=None, lifespan=lifespan)
 
 _OG_IMAGE = Path(__file__).resolve().parent / "static" / "og.png"
 
@@ -52,10 +57,13 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     if path in _NO_LOG_PATHS:
         return response
+    # The insert+commit is a synchronous fsync; run it on a worker thread and don't
+    # wait for it, so a burst of requests never queues behind SQLite on the event
+    # loop. db.log_request swallows its own errors.
     try:
         ip = get_client_ip(request)
         ua = request.headers.get("user-agent", "")
-        db.log_request(path, ip, ua)
+        asyncio.get_running_loop().run_in_executor(None, db.log_request, path, ip, ua)
     except Exception:
         pass
     # Responses vary by User-Agent (curl text vs browser HTML) and viewer timezone,
@@ -164,10 +172,30 @@ def ansi_to_html(content: str) -> str:
     return "".join(out)
 
 
-def html_wrap(content: str, refresh_secs: int | None = None) -> str:
+_SITE_TITLE = "mlbsched.run — MLB scores and schedule in your terminal"
+_SITE_URL   = "https://mlbsched.run"
+
+
+def page_title(content: str) -> str:
+    """A page's own title, taken from the first line the renderer printed
+    ("MLB Standings", "New York Mets — Friday, September 25, 2026"), so a shared
+    link unfurls as that page rather than as the generic site card."""
+    for line in content.splitlines():
+        text = " ".join(_ANSI_RE.sub("", line).split())
+        if text:
+            return text[:90]
+    return ""
+
+
+def html_wrap(content: str, refresh_secs: int | None = None, path: str = "/") -> str:
     clean = ansi_to_html(content)
     refresh_tag = f'<meta http-equiv="refresh" content="{refresh_secs}">' if refresh_secs else ""
-    title = "mlbsched.run — MLB scores and schedule in your terminal"
+    own = page_title(content)
+    if own and "mlbsched.run" not in own:
+        title = _html.escape(f"{own} · mlbsched.run")
+    else:
+        title = _SITE_TITLE
+    url   = _SITE_URL + (path if path.startswith("/") else "/" + path)
     desc  = ("Live MLB scores, schedules, standings, odds, and 30+ commands — "
              "straight from your terminal with curl, or in the browser.")
     return f"""<!DOCTYPE html>
@@ -181,7 +209,7 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
   <meta property="og:site_name" content="mlbsched.run">
   <meta property="og:title" content="{title}">
   <meta property="og:description" content="{desc}">
-  <meta property="og:url" content="https://mlbsched.run/">
+  <meta property="og:url" content="{url}">
   <meta property="og:image" content="https://mlbsched.run/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -246,7 +274,7 @@ def html_wrap(content: str, refresh_secs: int | None = None) -> str:
 def respond(request: Request, content: str, refresh_secs: int | None = None, status_code: int = 200):
     if is_curl(request):
         return PlainTextResponse(content, status_code=status_code)
-    return HTMLResponse(html_wrap(content, refresh_secs), status_code=status_code)
+    return HTMLResponse(html_wrap(content, refresh_secs, path=request.url.path), status_code=status_code)
 
 
 def team_status(team: str) -> int:
@@ -262,10 +290,17 @@ def team_status(team: str) -> int:
 # ── IP geolocation ────────────────────────────────────────────────────────────
 
 def get_client_ip(request: Request) -> str:
+    """The viewer's IP as seen by the proxies in front of us. Cloudflare and Fly
+    each set a header that a client can't forge; X-Forwarded-For's first entry
+    is client-supplied and only a last resort."""
+    for header in ("cf-connecting-ip", "fly-client-ip"):
+        ip = request.headers.get(header)
+        if ip:
+            return ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else ""
 
 
 def _geo_lookup(ip: str) -> dict | None:
@@ -650,10 +685,22 @@ def api_wildcard():
     return JSONResponse({"date": today_et().isoformat(), **wildcard.get_wildcard_json()})
 
 
+@app.get("/api/season")
+def api_season():
+    today = today_et()
+    return JSONResponse({
+        "date":            today.isoformat(),
+        "phase":           sched.season_phase(today),
+        "stats_season":    sched.stats_season(today),
+        "schedule_season": sched.schedule_season(today),
+        "dates":           sched.season_dates(today.year),
+    })
+
+
 @app.get("/api/leaders")
 def api_leaders():
     out = []
-    season = today_et().year
+    season = sched.stats_season()
     for group_name, tiles in leaders.DASHBOARD:
         for alias, title, n in tiles:
             data = leaders.get_leaders(alias, n)
@@ -944,7 +991,7 @@ def metrics(request: Request, days: int = 30):
             status_code=503,
         )
     auth = request.headers.get("authorization", "")
-    if not (auth.startswith("Bearer ") and auth[7:] == expected):
+    if not (auth.startswith("Bearer ") and hmac.compare_digest(auth[7:], expected)):
         return PlainTextResponse(
             "unauthorized — pass Authorization: Bearer <token>\n",
             status_code=401,
@@ -1111,7 +1158,7 @@ def lineup_route(request: Request, team: str):
 def player_route(request: Request, name: str):
     # Nobody matching the fragment is a miss, not an empty result set — 404 it.
     # A one-of-many match still renders the disambiguation list at 200.
-    matches, _ = player.find_player(name, today_et().year)
+    matches, _ = player.find_player(name, sched.stats_season())
     return respond(request, player.render_player(name), status_code=200 if matches else 404)
 
 

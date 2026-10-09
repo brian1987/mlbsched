@@ -8,7 +8,7 @@ import requests
 
 from mlbsched import (
     BOLD, DIM, RESET, RED, GREEN, CYAN, WHITE, GRAY,
-    TEAMS, MLB_API, ET, abv_from_id, team_color, today_et, fmt_game_time,
+    TEAMS, MLB_API, ET, abv_from_id, team_color, stats_season, fmt_game_time,
 )
 
 
@@ -109,7 +109,7 @@ def render_h2h(abv_a: str, abv_b: str, tz: ZoneInfo | None = None, out=None) -> 
         p(f"\n  {RED}Pick two different teams.{RESET}\n")
         return buf.getvalue()
 
-    season    = today_et().year
+    season    = stats_season()
     team_a_id = TEAMS[abv_a][0]
     team_b_id = TEAMS[abv_b][0]
     games     = fetch_h2h(team_a_id, team_b_id, season)
@@ -198,7 +198,7 @@ def _print_upcoming(g: dict, tz: ZoneInfo | None, out) -> None:
 
 
 def build_h2h_json(abv_a: str, abv_b: str) -> dict:
-    season    = today_et().year
+    season    = stats_season()
     team_a_id = TEAMS[abv_a][0]
     team_b_id = TEAMS[abv_b][0]
     games     = fetch_h2h(team_a_id, team_b_id, season)

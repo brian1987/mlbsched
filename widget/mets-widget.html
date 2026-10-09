@@ -174,6 +174,13 @@
     margin-top: 0.15rem;
   }
 
+  .mets-next {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    opacity: 0.7;
+    text-align: center;
+  }
+
   /* Footer */
   .mets-footer {
     margin-top: 1.1rem;
@@ -234,30 +241,16 @@
 
 <script>
 (function() {
-  const API = 'https://mlbsched.run/api/NYM';
+  // Today's Mets game. On an off day the widget falls back to last night's
+  // final (/api/box/NYM defaults to yesterday) and the next scheduled game.
+  const API_TODAY = 'https://mlbsched.run/api/NYM';
+  const API_LAST  = 'https://mlbsched.run/api/box/NYM';
+  const API_NEXT  = 'https://mlbsched.run/api/next/NYM';
 
-  function render(games) {
-    const body = document.getElementById('mets-body');
-    const dot  = document.getElementById('live-dot');
-
-    if (!games || games.length === 0) {
-      dot.className = 'mets-live-dot';
-      body.innerHTML = `
-        <div class="mets-nogame">
-          No game today — but there's always tomorrow.<br>
-          <small style="opacity:0.5">Check back soon or <a href="http://mlbsched.run/NYM" target="_blank" style="color:#ff5910">view the full schedule</a>.</small>
-        </div>`;
-      return;
-    }
-
-    const g = games[0];
-
-    if (g.status === 'Live') {
-      dot.className = 'mets-live-dot live';
-      const awayWin = g.away_score > g.home_score;
-      const homeWin = g.home_score > g.away_score;
-      const half = g.inning_half === 'Top' ? '▲' : '▼';
-      body.innerHTML = `
+  function scoreboard(g, status, statusClass) {
+    const awayWin = g.away_score > g.home_score;
+    const homeWin = g.home_score > g.away_score;
+    return `
         <div class="mets-scoreboard">
           <div class="mets-team">
             <div class="mets-team-abv">${g.away}</div>
@@ -266,7 +259,7 @@
           </div>
           <div class="mets-divider">
             <div class="mets-vs">@</div>
-            <div class="mets-status live-status">${half}${g.inning}</div>
+            <div class="mets-status ${statusClass || ''}">${status}</div>
           </div>
           <div class="mets-team">
             <div class="mets-team-abv">${g.home}</div>
@@ -274,29 +267,28 @@
             <div class="mets-team-name">${g.home_name}</div>
           </div>
         </div>`;
+  }
 
+  function nextLine(next) {
+    const g = next && next.game;
+    if (!g) return '';
+    const opp = g.home === 'NYM' ? `vs ${g.away}` : `@ ${g.home}`;
+    const when = [g.day_label, g.game_time || 'TBD'].filter(Boolean).join(' · ');
+    return `<div class="mets-next">Next: ${when} ${opp}</div>`;
+  }
+
+  function render(games) {
+    const body = document.getElementById('mets-body');
+    const dot  = document.getElementById('live-dot');
+    const g = games[0];
+
+    if (g.status === 'Live') {
+      dot.className = 'mets-live-dot live';
+      const half = g.inning_half === 'Top' ? '▲' : '▼';
+      body.innerHTML = scoreboard(g, `${half}${g.inning}`, 'live-status');
     } else if (g.status === 'Final') {
       dot.className = 'mets-live-dot';
-      const awayWin = g.away_score > g.home_score;
-      const homeWin = g.home_score > g.away_score;
-      body.innerHTML = `
-        <div class="mets-scoreboard">
-          <div class="mets-team">
-            <div class="mets-team-abv">${g.away}</div>
-            <div class="mets-score ${awayWin ? 'winner' : ''}">${g.away_score}</div>
-            <div class="mets-team-name">${g.away_name}</div>
-          </div>
-          <div class="mets-divider">
-            <div class="mets-vs">@</div>
-            <div class="mets-status">Final</div>
-          </div>
-          <div class="mets-team">
-            <div class="mets-team-abv">${g.home}</div>
-            <div class="mets-score ${homeWin ? 'winner' : ''}">${g.home_score}</div>
-            <div class="mets-team-name">${g.home_name}</div>
-          </div>
-        </div>`;
-
+      body.innerHTML = scoreboard(g, 'Final');
     } else {
       dot.className = 'mets-live-dot';
       body.innerHTML = `
@@ -308,10 +300,33 @@
     }
   }
 
+  function renderOffDay(last, next) {
+    const body = document.getElementById('mets-body');
+    document.getElementById('live-dot').className = 'mets-live-dot';
+    const g = last && last.games && last.games.find(x => x.status === 'Final');
+    if (g) {
+      body.innerHTML = scoreboard(g, 'Final · Yesterday') + nextLine(next);
+      return;
+    }
+    const upcoming = nextLine(next);
+    body.innerHTML = `
+        <div class="mets-nogame">
+          No game today — but there's always tomorrow.<br>
+          <small style="opacity:0.5">Check back soon or <a href="http://mlbsched.run/NYM" target="_blank" style="color:#ff5910">view the full schedule</a>.</small>
+        </div>` + upcoming;
+  }
+
+  const getJSON = url => fetch(url).then(r => r.json());
+
   function load() {
-    fetch(API)
-      .then(r => r.json())
-      .then(d => render(d.games))
+    getJSON(API_TODAY)
+      .then(d => {
+        if (d.games && d.games.length) { render(d.games); return; }
+        return Promise.all([
+          getJSON(API_LAST).catch(() => null),
+          getJSON(API_NEXT).catch(() => null),
+        ]).then(([last, next]) => renderOffDay(last, next));
+      })
       .catch(() => {
         document.getElementById('mets-body').innerHTML =
           '<div class="mets-loading">Could not load score.</div>';
