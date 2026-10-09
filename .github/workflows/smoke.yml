@@ -1,0 +1,53 @@
+name: Prod smoke test
+on:
+  schedule:
+    - cron: "17 14 * * *"   # daily, 10:17 AM EDT / 9:17 AM EST — last night's games are final
+  workflow_dispatch:
+  pull_request:              # a change to the smoke test proves itself against prod first
+    paths:
+      - tools/smoke.sh
+      - .github/workflows/smoke.yml
+
+# Read the repo, and open/comment/close the tracking issue. Nothing else.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check mlbsched.run
+        shell: bash          # -eo pipefail, so a failing check fails the step through tee
+        run: tools/smoke.sh | tee smoke.log
+
+      # One open issue at a time: the first failure opens it, later failures comment on
+      # it, and the next green run closes it.
+      - name: Open or update the smoke-test issue
+        if: failure() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="$(printf 'Smoke test failed — %s\n\n```\n%s\n```\n' "$run_url" "$(cat smoke.log 2>/dev/null)")"
+          gh label create smoke-test --color B60205 --description "Daily prod smoke test" 2>/dev/null || true
+          num="$(gh issue list --label smoke-test --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "Prod smoke test failing" --label smoke-test --body "$body"
+          fi
+
+      - name: Close the smoke-test issue once it passes again
+        if: success() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          num="$(gh issue list --label smoke-test --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [ -n "$num" ]; then
+            gh issue close "$num" --comment "Passing again: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
