@@ -324,7 +324,97 @@ def test_ical_event_tbd_becomes_all_day():
 
 def test_ical_calendar_is_valid_for_unknown_team(monkeypatch):
     assert ical.render_ical("ZZZ") is None
+    monkeypatch.setattr(ical, "_season_games_cache", {})
     monkeypatch.setattr(ical, "_fetch_season_games", lambda tid, y: [])
     cal = ical.render_ical("nym")
     assert cal.startswith("BEGIN:VCALENDAR\r\n") and cal.endswith("END:VCALENDAR\r\n")
     assert "X-WR-CALNAME:New York Mets" in cal
+
+
+# MLB's calendar for the two seasons around the winter flip.
+_SEASONS = {
+    2026: {"regularSeasonStartDate": "2026-03-26", "postSeasonEndDate": "2026-10-31"},
+    2027: {"regularSeasonStartDate": "2027-03-25", "postSeasonEndDate": "2027-10-31"},
+}
+
+
+def _one_game(year: int) -> dict:
+    return {"gamePk": year, "officialDate": f"{year}-04-20", "gameDate": f"{year}-04-20T23:10:00Z",
+            "status": {"detailedState": "Scheduled"},
+            "teams": {"away": {"team": {"name": "Atlanta Braves"}}, "home": {"team": {"name": "New York Mets"}}}}
+
+
+@pytest.fixture
+def winter(monkeypatch):
+    """Fake MLB calendar and schedule (one game per season). Returns the list of
+    seasons fetched, in order, so tests can see what was served from cache."""
+    fetched = []
+    monkeypatch.setattr(sched, "season_dates", lambda y: _SEASONS.get(y))
+    monkeypatch.setattr(ical, "_season_games_cache", {})
+
+    def fetch(team_id, year):
+        fetched.append(year)
+        return [_one_game(year)]
+    monkeypatch.setattr(ical, "_fetch_season_games", fetch)
+    return fetched
+
+
+def test_ical_feed_holds_last_season_until_opening_day(winter):
+    assert ical.feed_seasons(date(2026, 7, 1)) == [2026]          # in season
+    assert ical.feed_seasons(date(2026, 10, 31)) == [2026]        # last day of the postseason
+    assert ical.feed_seasons(date(2026, 11, 1)) == [2026, 2027]   # next year added, last year kept
+    assert ical.feed_seasons(date(2027, 1, 15)) == [2026, 2027]
+    assert ical.feed_seasons(date(2027, 3, 24)) == [2026, 2027]
+    assert ical.feed_seasons(date(2027, 3, 25)) == [2027]         # Opening Day: last year drops out
+
+
+def test_ical_feed_before_next_years_schedule_is_out(monkeypatch, winter):
+    monkeypatch.setattr(sched, "season_dates", lambda y: _SEASONS[2026] if y == 2026 else None)
+    assert ical.feed_seasons(date(2026, 11, 1)) == [2026]
+
+
+def test_ical_winter_calendar_carries_both_seasons(winter):
+    cal = ical.render_ical("NYM", today=date(2026, 11, 2))
+    assert "UID:mlb-2026@mlbsched.run" in cal and "UID:mlb-2027@mlbsched.run" in cal
+    assert "X-WR-CALDESC:New York Mets 2026–2027 schedule — mlbsched.run" in cal
+    ical.render_ical("NYM", today=date(2026, 11, 2))
+    assert winter.count(2026) == 1 and winter.count(2027) == 2   # finished season fetched once
+
+    icalendar = pytest.importorskip("icalendar")                # dev-only strict parser
+    assert len(icalendar.Calendar.from_ical(cal).walk("VEVENT")) == 2
+
+    cal = ical.render_ical("NYM", today=date(2027, 3, 25))
+    assert "UID:mlb-2026@" not in cal and "UID:mlb-2027@" in cal
+    assert "X-WR-CALDESC:New York Mets 2027 schedule — mlbsched.run" in cal
+    assert (121, 2026) not in ical._season_games_cache          # dropped once out of the feed
+
+
+def test_ical_rainout_and_makeup_become_one_event(monkeypatch, winter):
+    def game(pk, when, state):
+        return {"gamePk": pk, "officialDate": when[:10], "gameDate": when,
+                "status": {"detailedState": state},
+                "teams": {"away": {"team": {"name": "Atlanta Braves"}}, "home": {"team": {"name": "New York Mets"}}}}
+    rainout = game(9, "2026-04-25T20:10:00Z", "Postponed")
+    makeup = game(9, "2026-04-26T17:45:00Z", "Final")
+    other = game(10, "2026-04-27T23:10:00Z", "Scheduled")
+    assert ical._one_per_game([rainout, makeup, other]) == [makeup, other]
+    assert ical._one_per_game([makeup, rainout, other]) == [makeup, other]   # order-independent
+    later = game(9, "2026-05-02T17:45:00Z", "Postponed")                    # called off twice
+    assert ical._one_per_game([rainout, later]) == [later]
+
+    monkeypatch.setattr(ical, "_fetch_season_games", lambda tid, y: [rainout, makeup, other])
+    cal = ical.render_ical("NYM", today=date(2026, 7, 1))
+    assert cal.count("UID:mlb-9@mlbsched.run") == 1
+    assert "DTSTART:20260426T174500Z" in cal and "STATUS:CANCELLED" not in cal
+
+
+def test_ical_outage_never_serves_an_empty_calendar(monkeypatch, winter):
+    import requests
+    ical.render_ical("NYM", today=date(2026, 7, 1))              # a good copy to fall back on
+
+    def down(team_id, year):
+        raise requests.ConnectionError("MLB down")
+    monkeypatch.setattr(ical, "_fetch_season_games", down)
+    assert "UID:mlb-2026@" in ical.render_ical("NYM", today=date(2026, 7, 1))   # served stale
+    with pytest.raises(requests.RequestException):               # nothing to fall back on → 503
+        ical.render_ical("PHI", today=date(2026, 7, 1))
