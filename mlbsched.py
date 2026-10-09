@@ -1409,6 +1409,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/tomorrow             Tomorrow's schedule
     curl mlbsched.run/tomorrow/<TEAM>      Team tomorrow
     curl mlbsched.run/live                 All games in progress right now
+    curl mlbsched.run/watch/<TEAM>         Watch a game live — redraws in place until the final out
+    curl mlbsched.run/watch                Today's games, with the command to watch each
     curl mlbsched.run/box/<TEAM>           Yesterday's boxscore for a team
     curl mlbsched.run/box/<TEAM>/<DATE>    Boxscore for a team on a specific date
     curl mlbsched.run/box/<TEAM>/random    Boxscore from a random game in history

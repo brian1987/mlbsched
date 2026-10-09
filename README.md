@@ -33,6 +33,12 @@ curl mlbsched.run/NYM/next
 # Live scores (auto-refresh in browser)
 curl mlbsched.run/live
 
+# Watch a game live — line score, runners, count, pitcher, last pitch and play,
+# redrawn in place every few seconds until the final out (ctrl-c to quit)
+curl mlbsched.run/watch/CLE
+curl mlbsched.run/watch/CLE?once=1   # one snapshot, no stream
+curl mlbsched.run/watch              # today's games and the command for each
+
 # Boxscore for a team's last/specific game (or a random one from team history)
 curl mlbsched.run/box/NYM
 curl mlbsched.run/box/NYM/2026-04-20
@@ -184,6 +190,7 @@ curl mlbsched.run/api/bestbets
 curl mlbsched.run/api/weather
 curl mlbsched.run/api/distance
 curl mlbsched.run/api/live
+curl mlbsched.run/api/watch/CLE
 curl mlbsched.run/api/random
 curl mlbsched.run/api/broadcasts
 curl mlbsched.run/api/broadcasts/NYM
