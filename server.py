@@ -800,6 +800,8 @@ def api_postseason():
 
 @app.get("/api/postseason/{season}")
 def api_postseason_year(season: int):
+    if not postseason.valid_season(season):
+        return JSONResponse({"error": f"Unknown season: {season}"}, status_code=404)
     data = postseason.build_postseason_json(season)
     return JSONResponse(data, status_code=503 if "error" in data else 200)
 
@@ -1431,7 +1433,7 @@ def postseason_route(request: Request):
 @app.get("/postseason/{season}")
 def postseason_year(request: Request, season: str):
     tz = get_user_tz(geolocate_ip(get_client_ip(request)))
-    if not season.isdigit() or not (1903 <= int(season) <= today_et().year):
+    if not season.isdigit() or not postseason.valid_season(int(season)):
         msg = (
             f"\n  {sched.RED}Unknown season: {season}{sched.RESET}\n"
             f"  {sched.GRAY}Try: curl mlbsched.run/postseason/2015{sched.RESET}\n"

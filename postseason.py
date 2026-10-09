@@ -137,6 +137,23 @@ def summarize_series(entry: dict) -> dict | None:
     }
 
 
+FIRST_SEASON = 1903      # the first modern World Series
+
+
+def valid_season(season: int) -> bool:
+    return FIRST_SEASON <= season <= today_et().year
+
+
+def default_season() -> tuple[int, bool]:
+    """The season a bare /postseason shows: this year's once MLB has published its
+    bracket, otherwise last year's, so the winter and the regular season show the
+    postseason that happened instead of an empty page. Returns (season, fell_back)."""
+    year = today_et().year
+    if get_bracket(year):
+        return year, False
+    return year - 1, True
+
+
 def get_bracket(season: int) -> list[dict]:
     data = fetch_postseason(season)
     out = []
@@ -231,21 +248,24 @@ def render_postseason(season: int | None = None, out=None, tz: ZoneInfo | None =
     def p(s=""):
         print(s, file=_out)
 
-    season = season or today_et().year
+    # An unreachable MLB API propagates: the server turns it into a 503, the same
+    # as /api/postseason, so `curl -f` scripts see the failure.
+    fell_back = False
+    if season is None:
+        season, fell_back = default_season()
+    bracket = get_bracket(season)
 
     p()
     p(f"  {BOLD}{CYAN}MLB Postseason{RESET} — {BOLD}{WHITE}{season}{RESET}")
     p(f"  {GRAY}{'─' * 60}{RESET}")
-
-    try:
-        bracket = get_bracket(season)
-    except requests.RequestException:
-        p(f"  {YELLOW}Could not reach MLB API.{RESET}")
-        p()
-        return buf.getvalue()
+    if fell_back:
+        p(f"  {GRAY}The {season + 1} bracket isn't set yet — showing {season}.{RESET}")
 
     if not bracket:
-        p(f"  {GRAY}No postseason schedule published for {season} yet.{RESET}")
+        if season >= today_et().year:
+            p(f"  {GRAY}No postseason schedule published for {season} yet.{RESET}")
+        else:
+            p(f"  {GRAY}No postseason was played in {season}.{RESET}")
         p()
         return buf.getvalue()
 
@@ -311,8 +331,9 @@ def _game_json(g: dict) -> dict:
 
 
 def build_postseason_json(season: int | None = None) -> dict:
-    season = season or today_et().year
     try:
+        if season is None:
+            season, _ = default_season()
         bracket = get_bracket(season)
     except requests.RequestException as e:
         return {"error": f"upstream: {e}"}
