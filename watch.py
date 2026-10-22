@@ -9,8 +9,9 @@ frame on a short meta refresh; /api/watch/<TEAM> serves the snapshot as JSON.
 Every viewer of a game shares one upstream poll: the MLB live feed is cached per
 game for a few seconds behind a lock, so a crowd costs what one viewer does.
 
-/replay/<gamePk> plays a finished game back pitch by pitch through the same
-screen, using the feed's timecodes (MLB keeps a snapshot of every update).
+/replay/<TEAM>/<DATE> (or /replay/<gamePk>) plays a finished game back pitch by
+pitch through the same screen, using the feed's timecodes (MLB keeps a snapshot
+of every update).
 """
 
 import asyncio
@@ -157,6 +158,23 @@ def find_game_by_pk(pk: int) -> dict | None:
     return next((g for block in data.get("dates", []) for g in block.get("games", [])), None)
 
 
+def find_team_game(team_abv: str, date_str: str, number: int = 1) -> dict | None:
+    """The team's game on a date (the second of a doubleheader with number=2),
+    skipping postponed ones, or None."""
+    data = sched.fetch_schedule(date_str, sched.TEAMS[team_abv][0])
+    games = [g for block in data.get("dates", []) for g in block.get("games", [])
+             if not sched._is_no_play(g)]
+    return games[number - 1] if 1 <= number <= len(games) else None
+
+
+def replay_path(game: dict, team_abv: str | None = None) -> str:
+    """/replay/<TEAM>/<DATE> for a game, from the team's side (home by default),
+    with ?game=2 for the back half of a doubleheader."""
+    abv = team_abv or sched.team_label(game["teams"]["home"]["team"])
+    second = sched.is_doubleheader(game) and game.get("gameNumber") == 2
+    return f"/replay/{abv}/{game.get('officialDate')}{'?game=2' if second else ''}"
+
+
 # ── What to replay when nothing is on ──────────────────────────────────────────
 # An off day, or a team whose next game is hours away, points at the most recent
 # finished game instead: a replay works any time. The schedule's `fields` filter
@@ -217,7 +235,7 @@ def render_replay_hint(team_abv: str | None = None, tz: ZoneInfo | None = None) 
     when = f" ({'today' if day == 'Today' else day})" if day else ""
     print(f"  {GRAY}Replay {whose}{when}, pitch by pitch:{RESET}", file=buf)
     sched._render_game_line(game, buf, tz=tz)
-    print(f"         {GRAY}curl -N mlbsched.run/replay/{game['gamePk']}{RESET}", file=buf)
+    print(f"         {GRAY}curl -N mlbsched.run{replay_path(game, team_abv)}{RESET}", file=buf)
     return buf.getvalue()
 
 

@@ -1157,25 +1157,56 @@ async def watch_team(request: Request, team: str, once: bool = False):
     )
 
 
-@app.get("/replay/{game_pk}")
-async def replay_game(request: Request, game_pk: int, speed: float = 1.0, start: int = 0):
-    game = await asyncio.to_thread(watch.find_game_by_pk, game_pk)
-    if game is None:
-        return respond(request, f"\n  {sched.RED}No game with id {game_pk}{sched.RESET}\n", status_code=404)
+async def _replay(request: Request, game: dict, path: str, speed: float, start: int):
+    """Stream a finished game back, or say why not. `path` is the URL the viewer used."""
     if game["status"]["abstractGameState"] != "Final":
         home = sched.team_label(game["teams"]["home"]["team"])
         msg = f"\n  {sched.GRAY}That game isn't over yet — watch it live: curl mlbsched.run/watch/{home}{sched.RESET}\n"
         return respond(request, msg, status_code=400)
     if not is_curl(request):
-        msg = f"\n  {sched.GRAY}Replays play in the terminal: curl mlbsched.run/replay/{game_pk}{sched.RESET}\n"
+        msg = f"\n  {sched.GRAY}Replays play in the terminal: curl -N mlbsched.run{path}{sched.RESET}\n"
         return respond(request, msg)
     tz = await asyncio.to_thread(_viewer_tz, request)
     return StreamingResponse(
-        watch.replay(game_pk, game, tz, request.is_disconnected,
+        watch.replay(game["gamePk"], game, tz, request.is_disconnected,
                      speed=min(max(speed, 0.25), 10.0), start=max(start, 0)),
         media_type="text/plain; charset=utf-8",
         headers=_STREAM_HEADERS,
     )
+
+
+@app.get("/replay/{game_pk}")
+async def replay_game(request: Request, game_pk: int, speed: float = 1.0, start: int = 0):
+    game = await asyncio.to_thread(watch.find_game_by_pk, game_pk)
+    if game is None:
+        return respond(request, f"\n  {sched.RED}No game with id {game_pk}{sched.RESET}\n", status_code=404)
+    return await _replay(request, game, f"/replay/{game_pk}", speed, start)
+
+
+@app.get("/replay/{team}/{date_str}")
+async def replay_team_date(request: Request, team: str, date_str: str, game: int = 1,
+                           speed: float = 1.0, start: int = 0):
+    abv = team.upper()
+    if abv not in sched.TEAMS:
+        msg = (
+            f"\n  {sched.RED}Unknown team: {abv}{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/teams{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
+    try:
+        d = sched.parse_date(date_str).strftime("%Y-%m-%d")
+    except ValueError:
+        return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n", status_code=404)
+    found = await asyncio.to_thread(watch.find_team_game, abv, d, game)
+    if found is None:
+        which = "" if game == 1 else f" {game}"
+        msg = (
+            f"\n  {sched.GRAY}No {abv} game{which} on {d} to replay.{sched.RESET}\n"
+            f"  {sched.GRAY}Try: curl mlbsched.run/{abv}/{d}{sched.RESET}\n"
+        )
+        return respond(request, msg, status_code=404)
+    return await _replay(request, found, f"/replay/{abv}/{d}" + (f"?game={game}" if game != 1 else ""),
+                         speed, start)
 
 
 @app.get("/distance")
