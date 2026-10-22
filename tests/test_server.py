@@ -83,6 +83,26 @@ def test_metrics_requires_token(client, monkeypatch):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_metrics_daily_counts_skip_bot_scanners(client, monkeypatch):
+    import db
+    from datetime import datetime, timedelta, timezone
+    # Three days back: inside /metrics' 30-day window, but a date the live request
+    # logging (which only writes today) never touches, so the counts are exact.
+    day = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+    rows = [("/NYM", "curl", "a"), ("/NYM", "browser", "b"),
+            ("/wp-login.php", "browser", "c"), ("/.env", "curl", "d"), ("/.git/config", "curl", "e")]
+    conn = db._conn()
+    conn.executemany(
+        "INSERT INTO requests (ts, date, path, client, ip_hash) VALUES (?, ?, ?, ?, ?)",
+        [(f"{day}T12:00:00", day, path, cl, ip) for path, cl, ip in rows],
+    )
+    conn.commit()
+    monkeypatch.setenv("MLBSCHED_METRICS_TOKEN", "s3cret")
+    r = client.get("/metrics", headers={"Authorization": "Bearer s3cret", **CURL})
+    line = next(l for l in r.text.splitlines() if l.startswith(day))
+    assert line.split()[1:] == ["2", "2", "1", "1"]     # requests, unique, curl, browser: bots excluded
+
+
 def test_help_about_random_offline(client):
     for path in ("/help", "/about", "/random", "/ical"):
         assert client.get(path, headers=CURL).status_code == 200, path
