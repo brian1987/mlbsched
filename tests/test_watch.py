@@ -4,7 +4,7 @@ the MLB live-feed shape, so this runs offline like the rest of the suite."""
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -180,6 +180,7 @@ def client(monkeypatch):
     watch._feed_cache.clear()
     monkeypatch.setattr(server, "geolocate_ip", lambda ip: None)
     monkeypatch.setattr(watch, "find_game", lambda abv: GAME)
+    monkeypatch.setattr(watch, "last_final", lambda team_id=None: None)
     monkeypatch.setattr(watch, "_INTERVAL", {"Live": 0, "Preview": 0})
     monkeypatch.setattr(watch, "_FEED_TTL", {"Live": 0, "Preview": 0, "Final": 0})
     with TestClient(server.app) as c:
@@ -224,6 +225,23 @@ def test_watch_far_off_game_explains_when_it_opens(client, monkeypatch):
     assert "First pitch" in text and "opens 3 hours before first pitch" in text
 
 
+def test_watch_far_off_game_offers_the_teams_last_game(client, monkeypatch):
+    later = (datetime.now(timezone.utc) + timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    serve(monkeypatch, feed(state="Preview", detailed="Scheduled", start=later))
+    asked = []
+    monkeypatch.setattr(watch, "last_final", lambda team_id=None: asked.append(team_id) or FINAL_GAME)
+    text = plain(client.get("/watch/CLE", headers=CURL).text)
+    assert asked == [CLE]
+    assert "Replay CLE's last game" in text and "curl -N mlbsched.run/replay/849831" in text
+    assert "replay" not in client.get("/watch/CLE?once=1", headers=CURL).text   # scripts get the frame alone
+
+
+def test_watch_live_game_offers_no_replay(client, monkeypatch):
+    serve(monkeypatch, feed())
+    monkeypatch.setattr(watch, "last_final", lambda team_id=None: FINAL_GAME)
+    assert "/replay/" not in client.get("/watch/CLE", headers=BROWSER).text
+
+
 def test_watch_browser_gets_a_refreshing_page(client, monkeypatch):
     serve(monkeypatch, feed())
     r = client.get("/watch/CLE", headers=BROWSER)
@@ -256,3 +274,71 @@ def test_replay_refuses_a_game_in_progress(client, monkeypatch):
     monkeypatch.setattr(watch, "find_game_by_pk", lambda pk: GAME)
     r = client.get("/replay/849832", headers=CURL)
     assert r.status_code == 400 and "watch it live" in plain(r.text)
+
+
+# ── replay hint ───────────────────────────────────────────────────────────────
+FINAL_GAME = {"gamePk": 849831, "gameType": "D", "seriesDescription": "AL Division Series",
+              "seriesGameNumber": 5, "gameDate": "2026-10-11T00:08:00Z", "officialDate": "2026-10-10",
+              "status": {"abstractGameState": "Final", "detailedState": "Final"},
+              "teams": {"away": {"team": {"id": CWS}, "score": 0}, "home": {"team": {"id": CLE}, "score": 2}}}
+
+
+class _Resp:
+    def __init__(self, data):
+        self.data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.data
+
+
+@pytest.fixture
+def schedule(monkeypatch):
+    """Stub MLB's schedule for last_final; returns the params of each request."""
+    watch._last_final_cache.clear()
+    calls = []
+
+    def stub(games):
+        def get(url, params=None, timeout=None):
+            calls.append(params)
+            return _Resp({"dates": [{"games": games}]})
+        monkeypatch.setattr(watch.requests, "get", get)
+        return calls
+
+    monkeypatch.setattr(watch.sched, "season_dates", lambda year: {"postSeasonEndDate": f"{year}-11-01"})
+    yield stub
+    watch._last_final_cache.clear()
+
+
+def test_last_final_is_the_newest_finished_game(schedule, monkeypatch):
+    monkeypatch.setattr(watch.sched, "today_et", lambda: date(2026, 10, 22))
+    rained_out = {**FINAL_GAME, "gamePk": 1, "gameDate": "2026-10-12T00:00:00Z",
+                  "status": {"abstractGameState": "Final", "detailedState": "Postponed"}}
+    upcoming = {**FINAL_GAME, "gamePk": 2, "gameDate": "2026-10-24T00:00:00Z",
+                "status": {"abstractGameState": "Preview", "detailedState": "Scheduled"}}
+    older = {**FINAL_GAME, "gamePk": 3, "gameDate": "2026-10-09T00:00:00Z"}
+    calls = schedule([older, FINAL_GAME, rained_out, upcoming])
+    assert watch.last_final(CLE)["gamePk"] == 849831
+    assert calls[0]["teamId"] == CLE and calls[0]["endDate"] == "2026-10-22"
+    watch.last_final(CLE)
+    assert len(calls) == 1                                # cached
+
+
+def test_last_final_in_the_offseason_looks_back_from_the_postseason(schedule, monkeypatch):
+    monkeypatch.setattr(watch.sched, "today_et", lambda: date(2027, 2, 10))
+    calls = schedule([FINAL_GAME])
+    watch.last_final()
+    assert "teamId" not in calls[0] and calls[0]["endDate"] == "2026-11-01"
+
+
+def test_watch_index_offers_a_replay_only_when_nothing_is_live(monkeypatch):
+    monkeypatch.setattr(watch, "last_final", lambda team_id=None: FINAL_GAME)
+    monkeypatch.setattr(watch.sched, "fetch_schedule", lambda d: {"dates": []})
+    monkeypatch.setattr(watch.sched, "live_games_now", lambda: [])
+    text = plain(watch.render_index())
+    assert "Nothing live right now" in text and "curl -N mlbsched.run/replay/849831" in text
+    assert "CWS" in text and "ALDS G5" in text
+    monkeypatch.setattr(watch.sched, "live_games_now", lambda: [GAME])
+    assert "/replay/" not in watch.render_index()

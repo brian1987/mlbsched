@@ -1132,8 +1132,13 @@ async def watch_team(request: Request, team: str, once: bool = False):
         )
         return respond(request, msg)
     snap = watch.snapshot(await watch.fetch_feed_async(game["gamePk"]), game)
+    # Hours before first pitch, offer the team's last game as a replay meanwhile.
+    far_off = snap["status"] == "Preview" and not watch.is_over(snap) and not watch.worth_streaming(snap)
+    hint = await asyncio.to_thread(watch.render_replay_hint, abv, tz) if far_off and not once else ""
     if not is_curl(request):
         frame = watch.render_frame(snap, tz=tz, mode="browser")
+        if hint:
+            frame += "\n" + hint
         return respond(request, frame, refresh_secs=None if watch.is_over(snap) else 10)
     if once or not watch.worth_streaming(snap) or watch.active_streams() >= watch.MAX_STREAMS:
         frame = watch.render_frame(snap, tz=tz, mode="once")
@@ -1143,6 +1148,7 @@ async def watch_team(request: Request, team: str, once: bool = False):
             else:
                 frame += (f"  {sched.GRAY}The live screen opens 3 hours before first pitch — "
                           f"come back then: curl mlbsched.run/watch/{abv}{sched.RESET}\n\n")
+                frame += f"{hint}\n" if hint else ""
         return PlainTextResponse(frame)
     return StreamingResponse(
         watch.stream(game, tz, request.is_disconnected),

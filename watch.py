@@ -157,6 +157,70 @@ def find_game_by_pk(pk: int) -> dict | None:
     return next((g for block in data.get("dates", []) for g in block.get("games", [])), None)
 
 
+# ── What to replay when nothing is on ──────────────────────────────────────────
+# An off day, or a team whose next game is hours away, points at the most recent
+# finished game instead: a replay works any time. The schedule's `fields` filter
+# keeps six weeks of every team's games to ~125 KB.
+_LAST_FINAL_FIELDS = ",".join([
+    "dates", "games", "gamePk", "gameDate", "officialDate", "gameType", "status",
+    "abstractGameState", "detailedState", "reason", "teams", "away", "home", "team",
+    "id", "name", "score", "seriesDescription", "seriesGameNumber", "doubleHeader",
+    "gameNumber",
+])
+_LAST_FINAL_WINDOW = timedelta(days=45)     # covers the regular season's end to the postseason's
+_LAST_FINAL_TTL = 300
+_last_final_cache: dict[int | None, tuple[float, dict | None]] = {}   # team_id -> (fetched_at, game)
+
+
+def last_final(team_id: int | None = None) -> dict | None:
+    """The most recent finished game, league-wide or the team's. Looks back from
+    today, or in the offseason from the end of the last postseason. None if
+    nothing turns up or MLB is down with nothing cached."""
+    now = time.monotonic()
+    cached = _last_final_cache.get(team_id)
+    if cached is not None and now - cached[0] < _LAST_FINAL_TTL:
+        return cached[1]
+    today = sched.today_et()
+    post_end = sched.season_date(sched.season_dates(sched.stats_season(today)), "postSeasonEndDate")
+    end = min(today, post_end) if post_end else today
+    params = {
+        "sportId":   1,
+        "gameType":  "R,F,D,L,W",
+        "startDate": (end - _LAST_FINAL_WINDOW).strftime("%Y-%m-%d"),
+        "endDate":   end.strftime("%Y-%m-%d"),
+        "fields":    _LAST_FINAL_FIELDS,
+    }
+    if team_id:
+        params["teamId"] = team_id
+    try:
+        resp = requests.get(f"{sched.MLB_API}/schedule", params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException:
+        return cached[1] if cached is not None else None
+    finals = [g for block in data.get("dates", []) for g in block.get("games", [])
+              if g["status"]["abstractGameState"] == "Final" and not sched._is_no_play(g)]
+    game = max(finals, key=lambda g: g.get("gameDate", ""), default=None)
+    _last_final_cache[team_id] = (now, game)
+    return game
+
+
+def render_replay_hint(team_abv: str | None = None, tz: ZoneInfo | None = None) -> str:
+    """A few lines offering the latest finished game (the team's, if given) as a
+    replay, or '' when there's none to offer."""
+    game = last_final(sched.TEAMS[team_abv][0] if team_abv else None)
+    if game is None:
+        return ""
+    buf = io.StringIO()
+    day = sched.day_label(game.get("officialDate") or "")
+    whose = f"{team_abv}'s last game" if team_abv else "the latest game"
+    when = f" ({'today' if day == 'Today' else day})" if day else ""
+    print(f"  {GRAY}Replay {whose}{when}, pitch by pitch:{RESET}", file=buf)
+    sched._render_game_line(game, buf, tz=tz)
+    print(f"         {GRAY}curl -N mlbsched.run/replay/{game['gamePk']}{RESET}", file=buf)
+    return buf.getvalue()
+
+
 # ── Snapshot: the feed boiled down to what the screen (and /api/watch) shows ───
 def _name(person: dict | None) -> str | None:
     return (person or {}).get("fullName") or None
@@ -554,6 +618,12 @@ def render_index(tz: ZoneInfo | None = None) -> str:
         if g["status"]["abstractGameState"] != "Final" and not sched.is_placeholder_team(home):
             p(f"         {GRAY}curl mlbsched.run/watch/{sched.team_label(home)}{RESET}")
     p()
+    if not any(g["status"]["abstractGameState"] == "Live" for g in games):
+        hint = render_replay_hint(tz=tz)
+        if hint:
+            p(f"  {GRAY}Nothing live right now.{RESET}")
+            buf.write(hint)
+            p()
     p(f"  {GRAY}Either team's abbreviation works. The screen redraws in place until the final out.{RESET}")
     p()
     return buf.getvalue()
