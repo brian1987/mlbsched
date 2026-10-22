@@ -40,6 +40,10 @@ curl mlbsched.run/watch/CLE
 curl mlbsched.run/watch/CLE?once=1   # one snapshot, no stream
 curl mlbsched.run/watch              # today's games and the command for each
 
+# Replay a finished game pitch by pitch through the same screen
+curl -N mlbsched.run/replay/MIL/2026-10-04
+curl -N "mlbsched.run/replay/MIL/2026-10-04?speed=4"   # 0.25–10x; ?game=2 for a doubleheader's second game
+
 # Boxscore for a team's last/specific game (or a random one from team history)
 curl mlbsched.run/box/NYM
 curl mlbsched.run/box/NYM/2026-04-20

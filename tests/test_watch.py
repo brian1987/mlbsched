@@ -232,7 +232,7 @@ def test_watch_far_off_game_offers_the_teams_last_game(client, monkeypatch):
     monkeypatch.setattr(watch, "last_final", lambda team_id=None: asked.append(team_id) or FINAL_GAME)
     text = plain(client.get("/watch/CLE", headers=CURL).text)
     assert asked == [CLE]
-    assert "Replay CLE's last game" in text and "curl -N mlbsched.run/replay/849831" in text
+    assert "Replay CLE's last game" in text and "curl -N mlbsched.run/replay/CLE/2026-10-10" in text
     assert "replay" not in client.get("/watch/CLE?once=1", headers=CURL).text   # scripts get the frame alone
 
 
@@ -268,6 +268,49 @@ def test_replay_streams_a_finished_game(client, monkeypatch):
     shown = r.text.split("\x1b[H")[2:]
     assert len(shown) == 2                                # pre-game timecodes are skipped
     assert "REPLAY" in plain(shown[0]) and "Final" in plain(shown[-1])
+
+
+def test_replay_by_team_and_date(client, monkeypatch):
+    final_game = {**GAME, "status": {"abstractGameState": "Final", "detailedState": "Final"}}
+    asked = []
+    monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: asked.append((abv, d, n)) or final_game)
+    monkeypatch.setattr(watch, "fetch_timestamps", lambda pk: ["t0", "t1"])
+    monkeypatch.setattr(watch, "REPLAY_STEP_SECONDS", 0)
+    frames = {"t0": feed(), "t1": feed(state="Final", detailed="Final")}
+    monkeypatch.setattr(watch, "_get_feed", lambda pk, tc=None: frames[tc])
+    r = client.get("/replay/cle/2026-10-08?speed=10", headers=CURL)
+    assert asked == [("CLE", "2026-10-08", 1)]
+    assert "REPLAY" in plain(r.text) and "Final" in plain(r.text.split("\x1b[H")[-1])
+    client.get("/replay/CLE/10-08-2026?game=2", headers=CURL)
+    assert asked[-1] == ("CLE", "2026-10-08", 2)
+    page = re.sub(r"<[^>]+>", "", client.get("/replay/CLE/2026-10-08?game=2", headers=BROWSER).text)
+    assert "curl -N mlbsched.run/replay/CLE/2026-10-08?game=2" in page
+
+
+def test_replay_by_team_and_date_errors(client, monkeypatch):
+    monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: None)
+    assert client.get("/replay/ZZZ/2026-10-08", headers=CURL).status_code == 404
+    assert client.get("/replay/CLE/someday", headers=CURL).status_code == 404
+    r = client.get("/replay/CLE/2026-10-09", headers=CURL)
+    assert r.status_code == 404 and "No CLE game on 2026-10-09" in plain(r.text)
+
+
+def test_find_team_game_skips_postponed_and_picks_the_doubleheader_half(monkeypatch):
+    rained_out = {**FINAL_GAME, "gamePk": 1, "status": {"abstractGameState": "Final", "detailedState": "Postponed"}}
+    nightcap = {**FINAL_GAME, "gamePk": 2}
+    monkeypatch.setattr(watch.sched, "fetch_schedule",
+                        lambda d, team_id=None: {"dates": [{"games": [rained_out, FINAL_GAME, nightcap]}]})
+    assert watch.find_team_game("CLE", "2026-10-10")["gamePk"] == 849831
+    assert watch.find_team_game("CLE", "2026-10-10", 2)["gamePk"] == 2
+    assert watch.find_team_game("CLE", "2026-10-10", 3) is None
+    assert watch.find_team_game("CLE", "2026-10-10", 0) is None
+
+
+def test_replay_path():
+    assert watch.replay_path(FINAL_GAME) == "/replay/CLE/2026-10-10"
+    assert watch.replay_path(FINAL_GAME, "CWS") == "/replay/CWS/2026-10-10"
+    nightcap = {**FINAL_GAME, "doubleHeader": "Y", "gameNumber": 2}
+    assert watch.replay_path(nightcap) == "/replay/CLE/2026-10-10?game=2"
 
 
 def test_replay_refuses_a_game_in_progress(client, monkeypatch):
@@ -338,7 +381,7 @@ def test_watch_index_offers_a_replay_only_when_nothing_is_live(monkeypatch):
     monkeypatch.setattr(watch.sched, "fetch_schedule", lambda d: {"dates": []})
     monkeypatch.setattr(watch.sched, "live_games_now", lambda: [])
     text = plain(watch.render_index())
-    assert "Nothing live right now" in text and "curl -N mlbsched.run/replay/849831" in text
+    assert "Nothing live right now" in text and "curl -N mlbsched.run/replay/CLE/2026-10-10" in text
     assert "CWS" in text and "ALDS G5" in text
     monkeypatch.setattr(watch.sched, "live_games_now", lambda: [GAME])
     assert "/replay/" not in watch.render_index()
