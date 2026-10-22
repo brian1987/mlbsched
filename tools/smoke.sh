@@ -29,14 +29,14 @@ fetch() {
         -o "$tmp/body" -w '%{content_type}' "$BASE$1" 2>"$tmp/err")"
 }
 
-# Text route: 200, plain text (the curl view), and contains a marker.
+# Text route: 200, plain text (the curl view), and matches a marker (extended regex).
 check_text() {
     local path="$1" marker="$2"
     if ! fetch "$path"; then
         fail "$path — $(tr -d '\n' <"$tmp/err")"
     elif [[ "$ctype" != text/plain* ]]; then
         fail "$path — expected text/plain, got '$ctype'"
-    elif ! grep -qF -- "$marker" "$tmp/body"; then
+    elif ! grep -qE -- "$marker" "$tmp/body"; then
         fail "$path — 200 but missing '$marker'"
     else
         ok "$path"
@@ -85,7 +85,7 @@ check_cert() {
 
 echo "smoke test: $BASE  ($(date -u '+%Y-%m-%d %H:%M UTC'))"
 
-check_text  /           "MLB Schedule"
+check_text  /           "MLB Schedule|Live Now"     # the header while a game is on
 check_text  /help       "curl mlbsched.run/standings"
 check_text  /standings  "MLB Standings"
 check_json  /api/teams  "len(d['teams']) == 30 and all({'team', 'id', 'name'} <= set(t) for t in d['teams'])"
