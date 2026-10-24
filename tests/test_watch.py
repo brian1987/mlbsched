@@ -287,6 +287,31 @@ def test_replay_by_team_and_date(client, monkeypatch):
     assert "curl -N mlbsched.run/replay/CLE/2026-10-08?game=2" in page
 
 
+def test_watch_with_a_date_plays_the_replay(client, monkeypatch):
+    final_game = {**GAME, "status": {"abstractGameState": "Final", "detailedState": "Final"}}
+    asked = []
+    monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: asked.append((abv, d, n)) or final_game)
+    monkeypatch.setattr(watch, "fetch_timestamps", lambda pk: ["t0", "t1"])
+    monkeypatch.setattr(watch, "REPLAY_STEP_SECONDS", 0)
+    frames = {"t0": feed(), "t1": feed(state="Final", detailed="Final")}
+    monkeypatch.setattr(watch, "_get_feed", lambda pk, tc=None: frames[tc])
+    r = client.get("/watch/cle/2026-10-08?speed=10&game=2", headers=CURL)
+    assert asked == [("CLE", "2026-10-08", 2)]
+    assert "REPLAY" in plain(r.text) and "Final" in plain(r.text.split("\x1b[H")[-1])
+    page = re.sub(r"<[^>]+>", "", client.get("/watch/CLE/2026-10-08", headers=BROWSER).text)
+    assert "curl -N mlbsched.run/replay/CLE/2026-10-08" in page   # browsers learn the canonical URL
+
+
+def test_watch_with_a_date_errors(client, monkeypatch):
+    monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: None)
+    assert client.get("/watch/ZZZ/2026-10-08", headers=CURL).status_code == 404
+    assert client.get("/watch/CLE/someday", headers=CURL).status_code == 404
+    assert client.get("/watch/CLE/2026-10-09", headers=CURL).status_code == 404
+    monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: GAME)
+    r = client.get("/watch/CLE/2026-10-10", headers=CURL)
+    assert r.status_code == 400 and "watch it live" in plain(r.text)
+
+
 def test_replay_by_team_and_date_errors(client, monkeypatch):
     monkeypatch.setattr(watch, "find_team_game", lambda abv, d, n=1: None)
     assert client.get("/replay/ZZZ/2026-10-08", headers=CURL).status_code == 404
