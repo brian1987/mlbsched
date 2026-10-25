@@ -34,7 +34,7 @@ curl mlbsched.run/NYM/next
 # Live scores (auto-refresh in browser)
 curl mlbsched.run/live
 
-# Watch a game live — line score, runners, count, pitcher, last pitch and play,
+# Watch a game live — line score, runners, count, win odds, pitcher, last pitch and play,
 # redrawn in place every few seconds until the final out (ctrl-c to quit)
 curl mlbsched.run/watch/CLE
 curl "mlbsched.run/watch/CLE?once=1"   # one snapshot, no stream

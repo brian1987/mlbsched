@@ -169,6 +169,96 @@ def test_pregame_frame_and_streaming_window():
     assert watch.worth_streaming(watch.snapshot(feed(), GAME))
 
 
+def odds_frame(odds, **kw):
+    return watch.render_frame(watch.snapshot(feed(**kw), GAME), mode="stream", odds=odds)
+
+
+def odds_rows(odds, **kw):
+    """The two rows beside home plate, as plain text."""
+    lines = plain(odds_frame(odds, **kw)).split("\n")
+    at = next(i for i, l in enumerate(lines) if "⌂" in l)
+    return lines[at - 1].strip(), lines[at].strip()
+
+
+def test_odds_sit_beside_home_plate_without_moving_anything():
+    bare, with_odds = odds_frame(None), odds_frame([55.0, 64.2])
+    a, b = bare.split("\n"), with_odds.split("\n")
+    assert len(a) == len(b)                                # same height: nothing pushed down
+    changed = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+    assert len(changed) == 2 and changed[1] == changed[0] + 1
+    assert all(b[i].startswith(a[i]) for i in changed)     # the diamond itself is untouched
+    upper, lower = (plain(b[i]) for i in changed)
+    assert upper.endswith("▄  CWS 64%") and lower.endswith("to win")   # home's odds above the line
+    assert max(len(plain(l)) for l in b) <= watch.WIDTH + 2
+
+
+def test_odds_name_the_favorite():
+    upper, lower = odds_rows([40.0, 29.6])
+    assert upper.endswith("CLE 70%") and lower.endswith("▀  to win")   # away's below the line
+    assert odds_rows([50.2])[0].endswith("Even") and odds_rows([50.2])[1].endswith("odds")
+    assert odds_rows([99.8])[0].endswith("█  CWS 99%")    # not over until the last out
+
+
+def test_odds_chart_holds_still_as_the_game_goes():
+    game = [50 + (i % 10) * 4.0 - 18 for i in range(200)]
+
+    def chart(n):
+        cols = -(-n // max(watch.ODDS_PER_CELL, -(-n // watch.ODDS_WIDTH)))
+        snap = watch.snapshot(feed(), GAME)
+        return tuple(plain(row)[:cols] for row in watch._odds_lines(snap, game[:n]))
+
+    assert len(chart(4)[0]) == 1 and len(chart(5)[0]) == 2
+    for n in range(4, 80):
+        (top, bottom), (top2, bottom2) = chart(n), chart(n + 1)
+        assert top2[:len(top) - 1] == top[:-1] and bottom2[:len(bottom) - 1] == bottom[:-1]
+    assert len(chart(80)[0]) == watch.ODDS_WIDTH
+    assert len(chart(200)[0]) == watch.ODDS_WIDTH          # a 20-inning game still fits
+
+
+def test_odds_show_between_halves_but_not_once_final():
+    assert odds_rows([70.0], inning_state="Middle")[0].endswith("CWS 70%")
+    assert "to win" not in plain(odds_frame([100.0], state="Final", detailed="Final"))
+
+
+def test_odds_refetch_only_when_a_play_has_finished(monkeypatch):
+    watch._odds_cache.clear()
+    calls = []
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: calls.append(pk) or [52.0, 58.0, 61.0][:len(calls) + 1])
+    assert watch.game_odds(1, 2) == [52.0, 58.0]
+    assert watch.game_odds(1, 2) == [52.0, 58.0] and len(calls) == 1     # nothing new: no fetch
+    assert watch.game_odds(1, 3) == [52.0, 58.0] and len(calls) == 1     # behind, but fetched just now
+    monkeypatch.setattr(watch, "ODDS_REFRESH", 0)
+    assert watch.game_odds(1, 3) == [52.0, 58.0, 61.0] and len(calls) == 2
+    assert watch.game_odds(1, 1) == [52.0]                 # never ahead of the screen
+
+
+def test_odds_failures_keep_the_last_good_odds(monkeypatch):
+    watch._odds_cache.clear()
+    monkeypatch.setattr(watch, "ODDS_REFRESH", 0)
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: [55.0])
+    assert watch.game_odds(2, 1) == [55.0]
+
+    def down(pk):
+        raise watch.requests.ConnectionError("MLB down")
+    monkeypatch.setattr(watch, "_get_odds", down)
+    assert watch.game_odds(2, 2) == [55.0]
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: 1 / 0)          # anything at all
+    assert watch.game_odds(3, 1) == []
+
+
+def test_get_odds_keeps_finished_plays_in_order(monkeypatch):
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return [{"about": {"atBatIndex": 1, "isComplete": True}, "homeTeamWinProbability": 60.0},
+                    {"about": {"atBatIndex": 0, "isComplete": True}, "homeTeamWinProbability": 45.5},
+                    {"about": {"atBatIndex": 2, "isComplete": False}, "homeTeamWinProbability": 61.0}]
+    asked = {}
+    monkeypatch.setattr(watch.requests, "get", lambda url, params=None, timeout=None: asked.update(params) or Resp())
+    assert watch._get_odds(5) == [45.5, 60.0]
+    assert "homeTeamWinProbability" in asked["fields"]
+
+
 def test_paint_redraws_in_place():
     out = watch.paint("a\nb\n")
     assert out == "\x1b[Ha\x1b[K\nb\x1b[K\n\x1b[J"
@@ -178,6 +268,8 @@ def test_paint_redraws_in_place():
 @pytest.fixture
 def client(monkeypatch):
     watch._feed_cache.clear()
+    watch._odds_cache.clear()
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: [])
     monkeypatch.setattr(server, "geolocate_ip", lambda ip: None)
     monkeypatch.setattr(watch, "find_game", lambda abv: GAME)
     monkeypatch.setattr(watch, "last_final", lambda team_id=None: None)
@@ -209,6 +301,31 @@ def test_watch_streams_until_final(client, monkeypatch):
     assert len(frames) == 3
     assert "▼ 5th" in plain(frames[0]) and "Final" in plain(frames[-1])
     assert watch.active_streams() == 0
+
+
+def test_watch_stream_shows_the_odds(client, monkeypatch):
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: [57.0, 61.0])   # one play done: 57
+    serve(monkeypatch, feed(), feed(), feed(state="Final", detailed="Final", runs=(2, 3)))
+    frames = [plain(f) for f in client.get("/watch/CLE", headers=CURL).text.split("\x1b[H")[2:]]
+    assert "CWS 57%" in frames[0] and "to win" in frames[0] and "to win" not in frames[-1]
+
+
+def test_watch_shows_the_odds_on_every_view(client, monkeypatch):
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: [57.0, 61.0])   # one play done: 57
+    serve(monkeypatch, feed())
+    assert "CWS 57%" in plain(client.get("/watch/CLE?once=1", headers=CURL).text)
+    assert "57%" in client.get("/watch/CLE", headers=BROWSER).text
+    assert client.get("/api/watch/CLE").json()["game"]["win_probability"] == {"home": 57.0, "away": 43.0}
+
+
+def test_watch_without_odds_looks_as_it_did(client, monkeypatch):
+    def down(pk):
+        raise watch.requests.ConnectionError("MLB down")
+    monkeypatch.setattr(watch, "_get_odds", down)
+    serve(monkeypatch, feed())
+    r = client.get("/watch/CLE?once=1", headers=CURL)
+    assert r.status_code == 200 and "to win" not in r.text and "▼ 5th" in plain(r.text)
+    assert client.get("/api/watch/CLE").json()["game"]["win_probability"] is None
 
 
 def test_watch_points_a_finished_game_at_its_chart(client, monkeypatch):
@@ -283,10 +400,12 @@ def test_replay_streams_a_finished_game(client, monkeypatch):
     monkeypatch.setattr(watch, "REPLAY_STEP_SECONDS", 0)
     frames = {"t0": feed(state="Preview"), "t1": feed(), "t2": feed(state="Final", detailed="Final")}
     monkeypatch.setattr(watch, "_get_feed", lambda pk, tc=None: frames[tc])
+    monkeypatch.setattr(watch, "_get_odds", lambda pk: [35.0, 30.0, 20.0, 0.0])   # the whole game's
     r = client.get("/replay/849832?speed=10", headers=CURL)
     shown = r.text.split("\x1b[H")[2:]
     assert len(shown) == 2                                # pre-game timecodes are skipped
     assert "REPLAY" in plain(shown[0]) and "Final" in plain(shown[-1])
+    assert "CLE 65%" in plain(shown[0])                   # odds as of that moment, not the end
 
 
 def test_replay_by_team_and_date(client, monkeypatch):

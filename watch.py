@@ -2,8 +2,8 @@
 
 `curl mlbsched.run/watch/CLE` holds the connection open and redraws one screen in
 place every few seconds: line score, the diamond with runners on, balls/strikes/
-outs, who's batting and who's pitching (with a pitch count), the last pitch and
-the last play. The stream ends itself after the final out. Browsers get the same
+outs, the win odds so far, who's batting and who's pitching (with a pitch count),
+the last pitch and the last play. The stream ends itself after the final out. Browsers get the same
 frame on a short meta refresh; /api/watch/<TEAM> serves the snapshot as JSON.
 
 Every viewer of a game shares one upstream poll: the MLB live feed is cached per
@@ -28,6 +28,7 @@ import mlbsched as sched
 from mlbsched import BOLD, DIM, RESET, RED, GREEN, YELLOW, CYAN, WHITE, GRAY
 
 FEED_URL = "https://statsapi.mlb.com/api/v1.1/game/{pk}/feed/live"
+ODDS_URL = "https://statsapi.mlb.com/api/v1/game/{pk}/winProbability"
 
 # The full feed runs to ~1 MB by the late innings. StatsAPI's `fields` filter keeps
 # keys by name at any depth, which trims it to what this screen reads (~75-200 KB).
@@ -58,6 +59,13 @@ PREGAME_WINDOW = timedelta(hours=3)     # stream a countdown only this close to 
 REPLAY_STEP_SECONDS = 1.5               # one feed update per frame in /replay
 
 WIDTH = 58
+
+# MLB's win probability after each finished play, shown beside the diamond. The
+# full payload repeats every play's details (~1 MB by the 9th); the odds are ~15 KB.
+ODDS_FIELDS  = "homeTeamWinProbability,about,atBatIndex,isComplete"
+ODDS_REFRESH = 10                       # seconds between refetches while a new play's odds are pending
+ODDS_PER_CELL = 4                       # plays per chart column: nine innings fill ~20
+ODDS_WIDTH   = 20                       # columns at most; a long extra-inning game packs more plays into each
 
 # Terminal control: clear once, then repaint from the top-left each frame,
 # erasing each line's tail and everything below so a shorter frame leaves no debris.
@@ -120,6 +128,83 @@ async def fetch_feed_async(pk: int) -> dict:
     lock = _feed_locks.setdefault(pk, asyncio.Lock())
     async with lock:
         return await asyncio.to_thread(fetch_feed, pk)
+
+
+# ── Win odds: shared per-game cache, fetched only when plays have finished ─────
+_odds_cache: dict[int, tuple[float, list[float]]] = {}   # gamePk -> (fetched_at_monotonic, home win % per play)
+_odds_pending: set[int] = set()
+_odds_tasks: set[asyncio.Task] = set()      # background refreshes, held so they aren't collected mid-fetch
+
+
+def _get_odds(pk: int) -> list[float]:
+    resp = requests.get(ODDS_URL.format(pk=pk), params={"fields": ODDS_FIELDS}, timeout=5)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, list):
+        return []
+    done = [p for p in data if (p.get("about") or {}).get("isComplete")
+            and p.get("homeTeamWinProbability") is not None]
+    done.sort(key=lambda p: p["about"].get("atBatIndex", 0))
+    return [float(p["homeTeamWinProbability"]) for p in done]
+
+
+def _odds_stale(pk: int, plays_done: int, now: float) -> bool:
+    cached = _odds_cache.get(pk)
+    return cached is None or (len(cached[1]) < plays_done and now - cached[0] >= ODDS_REFRESH)
+
+
+def refresh_odds(pk: int, plays_done: int) -> None:
+    """Refetch a game's odds if plays have finished since the last fetch. Never
+    raises: the odds are extra, and the screen carries on without them."""
+    now = time.monotonic()
+    if not _odds_stale(pk, plays_done, now):
+        return
+    try:
+        odds = _get_odds(pk)
+    except Exception:
+        odds = None
+    with _sync_lock:
+        prev = _odds_cache.get(pk)
+        if odds is None:                   # keep the last good odds, and wait before retrying
+            odds = prev[1] if prev else []
+        if len(_odds_cache) > 64:
+            for k, (t, _) in list(_odds_cache.items()):
+                if now - t > 3600:
+                    del _odds_cache[k]
+        _odds_cache[pk] = (now, odds)
+
+
+def cached_odds(pk: int, plays_done: int) -> list[float]:
+    # Never ahead of the screen: the odds feed can land a play before the live feed does.
+    cached = _odds_cache.get(pk)
+    return cached[1][:plays_done] if cached else []
+
+
+def game_odds(pk: int, plays_done: int) -> list[float]:
+    """Home win % after each of the game's first `plays_done` plays."""
+    refresh_odds(pk, plays_done)
+    return cached_odds(pk, plays_done)
+
+
+async def odds_async(pk: int, plays_done: int) -> list[float]:
+    """game_odds() for the streaming loop. Once a game has odds, newer ones are fetched
+    in the background, so a slow odds feed never holds up a frame."""
+    if _odds_stale(pk, plays_done, time.monotonic()) and pk not in _odds_pending:
+        _odds_pending.add(pk)
+
+        async def fetch():
+            try:
+                await asyncio.to_thread(refresh_odds, pk, plays_done)
+            finally:
+                _odds_pending.discard(pk)
+
+        if pk in _odds_cache:
+            task = asyncio.get_running_loop().create_task(fetch())
+            _odds_tasks.add(task)
+            task.add_done_callback(_odds_tasks.discard)
+        else:
+            await fetch()
+    return cached_odds(pk, plays_done)
 
 
 # ── Which game to watch ────────────────────────────────────────────────────────
@@ -334,6 +419,7 @@ def snapshot(feed: dict, game: dict | None = None) -> dict:
     if events and not events[-1].get("isPitch"):
         note = (events[-1].get("details") or {}).get("description")
 
+    plays_done = sum(1 for p in plays if (p.get("about") or {}).get("isComplete"))
     decisions = ld.get("decisions") or {}
     probables = gd.get("probablePitchers") or {}
     dt = gd.get("datetime") or {}
@@ -366,6 +452,7 @@ def snapshot(feed: dict, game: dict | None = None) -> dict:
                         "home": (i.get("home") or {}).get("runs")} for i in ls.get("innings") or []],
         "last_pitch": last_pitch,
         "last_play":  last_play,
+        "plays_done": plays_done,
         "note":       note,
         "probables":  {"away": _name(probables.get("away")), "home": _name(probables.get("home"))},
         "decisions":  {k: _name(decisions.get(k)) for k in ("winner", "loser", "save")},
@@ -487,7 +574,30 @@ def _linescore(snap: dict) -> list[str]:
     return lines
 
 
-def _diamond(snap: dict) -> list[str]:
+def _odds_lines(snap: dict, odds: list[float] | None) -> tuple[str, str]:
+    """A two-row chart of the odds all game, the home team's above the line and
+    the away team's below it as in /winprob, with who's favored now at its end."""
+    if not odds:
+        return "", ""
+    away, home = snap["away"]["abv"], snap["home"]["abv"]
+    # Fixed-size columns, so the game so far holds still and only the newest one moves.
+    n = len(odds)
+    per = max(ODDS_PER_CELL, -(-n // ODDS_WIDTH))
+    cols = [odds[min(n, (i + 1) * per) - 1] for i in range(-(-n // per))]
+    top = "".join("█" if v >= 75 else "▄" if v > 50 else " " for v in cols)
+    bottom = "".join("█" if v <= 25 else "▀" if v < 50 else " " for v in cols)
+    gap = "  "
+    fav, pct = (home, odds[-1]) if odds[-1] >= 50 else (away, 100 - odds[-1])
+    pct = min(99, round(pct))              # never "100%" before the last out
+    if pct <= 50:
+        label, under = f"{WHITE}Even{RESET}", f"{GRAY}odds{RESET}"
+    else:
+        label, under = f"{BOLD}{sched.team_color(fav)}{fav}{RESET} {BOLD}{WHITE}{pct}%{RESET}", f"{GRAY}to win{RESET}"
+    return (f"{sched.team_color(home)}{top}{RESET}{gap}{label}",
+            f"{sched.team_color(away)}{bottom}{RESET}{gap}{under}")
+
+
+def _diamond(snap: dict, odds: list[float] | None = None) -> list[str]:
     on = snap["runners"]
 
     def base(b: str) -> str:
@@ -505,12 +615,14 @@ def _diamond(snap: dict) -> list[str]:
         ]
     else:
         count = ["", "", ""]
+    # The odds fill the empty space beside home plate, so the screen keeps its height.
+    upper, lower = _odds_lines(snap, odds)
     return [
         f"          {base('second')}              {count[0]}",
         f"        {GRAY}╱   ╲{RESET}            {count[1]}",
         f"      {base('third')}       {base('first')}          {count[2]}",
-        f"        {GRAY}╲   ╱{RESET}",
-        f"          {GRAY}⌂{RESET}",
+        f"        {GRAY}╲   ╱{RESET}" + (f"            {upper}" if upper else ""),
+        f"          {GRAY}⌂{RESET}" + (f"              {lower}" if lower else ""),
     ]
 
 
@@ -524,9 +636,10 @@ def _when(iso: str | None, tz: ZoneInfo | None) -> str:
 
 
 def render_frame(snap: dict, tz: ZoneInfo | None = None, mode: str = "stream",
-                 now: datetime | None = None) -> str:
+                 now: datetime | None = None, odds: list[float] | None = None) -> str:
     """One screen. mode: 'stream' (curl, redrawn in place), 'once' (a single
-    snapshot), 'browser' (meta refresh), 'replay' (as_of is the game clock)."""
+    snapshot), 'browser' (meta refresh), 'replay' (as_of is the game clock).
+    `odds` is the home team's win % after each play so far."""
     now = now or datetime.now(_UTC.utc)
     buf = io.StringIO()
 
@@ -556,7 +669,7 @@ def render_frame(snap: dict, tz: ZoneInfo | None = None, mode: str = "stream",
             p(line)
         if not is_over(snap):
             p()
-            for line in _diamond(snap):
+            for line in _diamond(snap, odds):
                 p(line)
             if in_play(snap):
                 p()
@@ -671,6 +784,17 @@ def render_index(tz: ZoneInfo | None = None) -> str:
 _active = 0
 
 
+async def live_odds(snap: dict) -> list[float] | None:
+    """The odds for a game in progress; None (no odds shown) for anything else,
+    or if they can't be had."""
+    if snap["status"] != "Live" or not snap.get("gamePk"):
+        return None
+    try:
+        return await odds_async(snap["gamePk"], snap["plays_done"])
+    except Exception:
+        return None
+
+
 def active_streams() -> int:
     return _active
 
@@ -686,7 +810,7 @@ async def stream(game: dict, tz: ZoneInfo | None, is_disconnected, team_abv: str
         yield CLEAR
         while True:
             snap = snapshot(await fetch_feed_async(pk), game)
-            yield paint(render_frame(snap, tz=tz, mode="stream"))
+            yield paint(render_frame(snap, tz=tz, mode="stream", odds=await live_odds(snap)))
             if is_over(snap):
                 if finished(snap):
                     yield "\n" + render_winprob_hint(game, team_abv)
@@ -744,7 +868,7 @@ async def replay(pk: int, game: dict | None, tz: ZoneInfo | None, is_disconnecte
             snap = snapshot(feed, game)
             if snap["status"] == "Preview":
                 continue                       # skip the pre-game hours
-            yield paint(render_frame(snap, tz=tz, mode="replay"))
+            yield paint(render_frame(snap, tz=tz, mode="replay", odds=await live_odds(snap)))
             if is_over(snap) or time.monotonic() - began > MAX_SECONDS:
                 break
             await asyncio.sleep(step)
