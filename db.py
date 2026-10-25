@@ -6,6 +6,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 DB_DIR = Path(os.environ.get("MLBSCHED_DATA_DIR", Path(__file__).parent))
 DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -39,6 +40,9 @@ def init_db():
             ip_hash    TEXT NOT NULL
         )
     """)
+    # Added after launch; older databases get the column on startup.
+    if "referrer" not in {r["name"] for r in conn.execute("PRAGMA table_info(requests)")}:
+        conn.execute("ALTER TABLE requests ADD COLUMN referrer TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON requests (date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_path ON requests (path)")
     conn.execute("""
@@ -98,7 +102,22 @@ def write_odds_cache(data_json: str, requests_remaining: int | None):
     conn.commit()
 
 
-def log_request(path: str, ip: str, user_agent: str):
+_SELF_HOSTS = {"mlbsched.run", "mlbsched.fly.dev", "localhost", "127.0.0.1", "testserver"}
+
+
+def referrer_site(referer: str) -> str | None:
+    """The site a visitor came from, as a bare domain ("reddit.com"). Only the
+    domain is kept, never the page, and clicks within mlbsched.run don't count."""
+    try:
+        host = (urlsplit(referer).hostname or "").removeprefix("www.")
+    except ValueError:
+        return None
+    if not host or host in _SELF_HOSTS:
+        return None
+    return host[:100]
+
+
+def log_request(path: str, ip: str, user_agent: str, referer: str = ""):
     """Record one request. Never raises: this runs fire-and-forget off the event
     loop, and a logging hiccup must not surface anywhere."""
     try:
@@ -107,8 +126,8 @@ def log_request(path: str, ip: str, user_agent: str):
         client = "curl" if user_agent.lower().startswith("curl") else "browser"
         conn = _conn()
         conn.execute(
-            "INSERT INTO requests (ts, date, path, client, ip_hash) VALUES (?, ?, ?, ?, ?)",
-            (now.isoformat(), now.strftime("%Y-%m-%d"), path, client, ip_hash),
+            "INSERT INTO requests (ts, date, path, client, ip_hash, referrer) VALUES (?, ?, ?, ?, ?, ?)",
+            (now.isoformat(), now.strftime("%Y-%m-%d"), path, client, ip_hash, referrer_site(referer)),
         )
         conn.commit()
     except Exception:

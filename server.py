@@ -65,7 +65,8 @@ async def log_requests(request: Request, call_next):
     try:
         ip = get_client_ip(request)
         ua = request.headers.get("user-agent", "")
-        asyncio.get_running_loop().run_in_executor(None, db.log_request, path, ip, ua)
+        ref = request.headers.get("referer", "")
+        asyncio.get_running_loop().run_in_executor(None, db.log_request, path, ip, ua, ref)
     except Exception:
         pass
     # Responses vary by User-Agent (curl text vs browser HTML) and viewer timezone,
@@ -1268,6 +1269,7 @@ _BOT_PATH_PATTERNS = (
     "%/.npmrc%",      # npm registry token scans
     "%elmah%",        # ASP.NET error-log probes (/elmah.axd, /admin/elmah.axd, …)
     "%_profiler%",    # Symfony profiler probes
+    "%/media/system/%",  # Joomla probes (/media/system/js/core.js)
     "%phpinfo%",
     "%.json",         # credentials/secrets/service-account scans (app serves none)
     "%.zip",          # /source.zip, /backup.zip dumps
@@ -1328,6 +1330,16 @@ def metrics(request: Request, days: int = 30):
         LIMIT  15
     """, (f"-{days} days",))
 
+    sources = db.query(f"""
+        SELECT referrer, COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
+        FROM   requests
+        WHERE  date >= date('now', ?) AND referrer IS NOT NULL
+               {_BOT_FILTER_SQL}
+        GROUP  BY referrer
+        ORDER  BY uniq DESC, total DESC
+        LIMIT  25
+    """, (f"-{days} days",))
+
     total_row = db.query("""
         SELECT COUNT(*) AS total, COUNT(DISTINCT ip_hash) AS uniq
         FROM   requests
@@ -1348,12 +1360,17 @@ def metrics(request: Request, days: int = 30):
             f"<td>{r['uniq']}</td><td>{r['curl_ct']}</td><td>{r['browser_ct']}</td></tr>"
             for r in daily
         )
+        # Paths and referrers come from whoever sent the request, so escape them.
         paths_html = "\n".join(
-            f"  <tr><td>{r['path']}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
+            f"  <tr><td>{_html.escape(r['path'])}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
             for r in top_paths
         )
+        sources_html = "\n".join(
+            f"  <tr><td>{_html.escape(r['referrer'])}</td><td>{r['uniq']}</td><td>{r['total']}</td></tr>"
+            for r in sources
+        ) or '  <tr><td class="dim" colspan="3">none yet</td></tr>'
         bots_html = "\n".join(
-            f"  <tr><td>{r['path']}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
+            f"  <tr><td>{_html.escape(r['path'])}</td><td>{r['total']}</td><td>{r['uniq']}</td></tr>"
             for r in bot_paths
         )
         html = f"""<!DOCTYPE html>
@@ -1381,6 +1398,11 @@ def metrics(request: Request, days: int = 30):
     <tr><th>Date</th><th>Requests</th><th>Unique IPs</th><th>curl</th><th>Browser</th></tr>
     {rows_html}
   </table>
+  <h2>Where visitors came from <span class="dim" style="font-size:12px">(browsers only; curl sends no referrer)</span></h2>
+  <table>
+    <tr><th>Site</th><th>Unique IPs</th><th>Requests</th></tr>
+    {sources_html}
+  </table>
   <h2>Top paths <span class="dim" style="font-size:12px">(bot scanners filtered)</span></h2>
   <table>
     <tr><th>Path</th><th>Requests</th><th>Unique IPs</th></tr>
@@ -1405,6 +1427,14 @@ def metrics(request: Request, days: int = 30):
     lines.append("-" * 46)
     for r in daily:
         lines.append(f"{r['date']:<12} {r['total']:>9} {r['uniq']:>7} {r['curl_ct']:>6} {r['browser_ct']:>8}")
+    lines.append("")
+    lines.append("Where visitors came from (browsers only; curl sends no referrer)")
+    lines.append(f"{'Site':<40} {'Unique':>7} {'Requests':>9}")
+    lines.append("-" * 58)
+    for r in sources:
+        lines.append(f"{r['referrer']:<40} {r['uniq']:>7} {r['total']:>9}")
+    if not sources:
+        lines.append("none yet")
     lines.append("")
     lines.append("Top paths (bot scanners filtered)")
     lines.append(f"{'Path':<40} {'Requests':>9} {'Unique':>7}")
