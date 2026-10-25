@@ -211,6 +211,24 @@ def test_watch_streams_until_final(client, monkeypatch):
     assert watch.active_streams() == 0
 
 
+def test_watch_points_a_finished_game_at_its_chart(client, monkeypatch):
+    monkeypatch.setattr(watch, "find_game", lambda abv: {**GAME, "officialDate": "2026-10-10"})
+    serve(monkeypatch, feed(state="Final", detailed="Final", runs=(2, 3)))
+    assert "See how the odds swung: curl mlbsched.run/winprob/CLE/2026-10-10" in plain(
+        client.get("/watch/CLE", headers=CURL).text)
+    assert "mlbsched.run/winprob/CLE/2026-10-10" in plain(client.get("/watch/CLE", headers=BROWSER).text)
+    assert "winprob" not in client.get("/watch/CLE?once=1", headers=CURL).text   # scripts get the frame alone
+    serve(monkeypatch, feed(state="Final", detailed="Postponed"))
+    assert "winprob" not in client.get("/watch/CLE", headers=CURL).text          # nothing to chart
+
+
+def test_watch_stream_ends_with_the_chart_pointer(client, monkeypatch):
+    monkeypatch.setattr(watch, "find_game", lambda abv: {**GAME, "officialDate": "2026-10-10"})
+    serve(monkeypatch, feed(), feed(), feed(state="Final", detailed="Final", runs=(2, 3)))
+    tail = plain(client.get("/watch/cle", headers=CURL).text.split("\x1b[H")[-1])
+    assert "Final" in tail and tail.rstrip().endswith("curl mlbsched.run/winprob/CLE/2026-10-10")
+
+
 def test_watch_once_is_a_single_snapshot(client, monkeypatch):
     serve(monkeypatch, feed())
     r = client.get("/watch/CLE?once=1", headers=CURL)
@@ -233,6 +251,7 @@ def test_watch_far_off_game_offers_the_teams_last_game(client, monkeypatch):
     text = plain(client.get("/watch/CLE", headers=CURL).text)
     assert asked == [CLE]
     assert "Replay CLE's last game" in text and "curl -N mlbsched.run/replay/CLE/2026-10-10" in text
+    assert "curl mlbsched.run/winprob/CLE/2026-10-10" in text
     assert "replay" not in client.get("/watch/CLE?once=1", headers=CURL).text   # scripts get the frame alone
 
 

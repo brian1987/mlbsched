@@ -175,6 +175,19 @@ def replay_path(game: dict, team_abv: str | None = None) -> str:
     return f"/replay/{abv}/{game.get('officialDate')}{'?game=2' if second else ''}"
 
 
+def winprob_path(game: dict, team_abv: str | None = None) -> str:
+    """/winprob/<TEAM>/<DATE> for a game, from the team's side (home by default)."""
+    abv = team_abv or sched.team_label(game["teams"]["home"]["team"])
+    return f"/winprob/{abv}/{game.get('officialDate')}"
+
+
+def render_winprob_hint(game: dict, team_abv: str | None = None) -> str:
+    """The line pointing a finished game's viewers at its chart ('' without a date to link)."""
+    if not game.get("officialDate"):
+        return ""
+    return f"  {GRAY}See how the odds swung: curl mlbsched.run{winprob_path(game, team_abv)}{RESET}\n"
+
+
 # ── What to replay when nothing is on ──────────────────────────────────────────
 # An off day, or a team whose next game is hours away, points at the most recent
 # finished game instead: a replay works any time. The schedule's `fields` filter
@@ -236,6 +249,7 @@ def render_replay_hint(team_abv: str | None = None, tz: ZoneInfo | None = None) 
     print(f"  {GRAY}Replay {whose}{when}, pitch by pitch:{RESET}", file=buf)
     sched._render_game_line(game, buf, tz=tz)
     print(f"         {GRAY}curl -N mlbsched.run{replay_path(game, team_abv)}{RESET}", file=buf)
+    print(f"         {GRAY}curl mlbsched.run{winprob_path(game, team_abv)}   (the win-odds chart){RESET}", file=buf)
     return buf.getvalue()
 
 
@@ -362,6 +376,12 @@ def snapshot(feed: dict, game: dict | None = None) -> dict:
 def is_over(snap: dict) -> bool:
     d = (snap.get("detailed") or "").lower()
     return snap["status"] == "Final" or any(w in d for w in ("postponed", "cancel", "suspended"))
+
+
+def finished(snap: dict) -> bool:
+    """Over because it was played to the end, not postponed, cancelled or suspended."""
+    d = (snap.get("detailed") or "").lower()
+    return snap["status"] == "Final" and not any(w in d for w in ("postponed", "cancel", "suspended"))
 
 
 def is_delayed(snap: dict) -> bool:
@@ -655,7 +675,7 @@ def active_streams() -> int:
     return _active
 
 
-async def stream(game: dict, tz: ZoneInfo | None, is_disconnected):
+async def stream(game: dict, tz: ZoneInfo | None, is_disconnected, team_abv: str | None = None):
     """Redraw the game every few seconds until it's over, the viewer leaves, or
     the session cap. Yields terminal output for a StreamingResponse."""
     global _active
@@ -668,6 +688,8 @@ async def stream(game: dict, tz: ZoneInfo | None, is_disconnected):
             snap = snapshot(await fetch_feed_async(pk), game)
             yield paint(render_frame(snap, tz=tz, mode="stream"))
             if is_over(snap):
+                if finished(snap):
+                    yield "\n" + render_winprob_hint(game, team_abv)
                 break
             if not worth_streaming(snap):
                 cd = sched.countdown_label(snap.get("start") or "")

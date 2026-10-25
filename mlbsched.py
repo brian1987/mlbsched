@@ -1526,6 +1526,8 @@ def render_help(out=None) -> str:
     curl mlbsched.run/watch/<TEAM>         Watch a game live — redraws in place until the final out
     curl mlbsched.run/watch                Today's games, with the command to watch each
     curl mlbsched.run/replay/<TEAM>/<DATE> Replay a finished game pitch by pitch
+    curl mlbsched.run/winprob/<TEAM>       Chart of how the odds swung in the team's last game
+    curl mlbsched.run/winprob/<TEAM>/<DATE> The same chart for a game on a specific date
     curl mlbsched.run/box/<TEAM>           Yesterday's boxscore for a team
     curl mlbsched.run/box/<TEAM>/<DATE>    Boxscore for a team on a specific date
     curl mlbsched.run/box/<TEAM>/random    Boxscore from a random game in history
@@ -1557,8 +1559,6 @@ def render_help(out=None) -> str:
     curl mlbsched.run/onthisday            On this date in MLB history (10/25/50 years ago)
     curl mlbsched.run/birthdays            Active players born on today's date
     curl mlbsched.run/birthdays/all        All-time legends born on today's date
-    curl mlbsched.run/wp/<TEAM>            Win-probability sparkline for the team's last completed game
-    curl mlbsched.run/wp/<TEAM>/<DATE>     Win-probability sparkline for a specific date
 
   {BOLD}Examples:{RESET}
     curl mlbsched.run
