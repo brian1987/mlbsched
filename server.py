@@ -1265,6 +1265,8 @@ _BOT_PATH_PATTERNS = (
     "%/.aws%",
     "%/.vscode%",
     "%/.idea%",
+    "%/.npmrc%",      # npm registry token scans
+    "%elmah%",        # ASP.NET error-log probes (/elmah.axd, /admin/elmah.axd, …)
     "%_profiler%",    # Symfony profiler probes
     "%phpinfo%",
     "%.json",         # credentials/secrets/service-account scans (app serves none)

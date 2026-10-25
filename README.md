@@ -37,7 +37,7 @@ curl mlbsched.run/live
 # Watch a game live — line score, runners, count, pitcher, last pitch and play,
 # redrawn in place every few seconds until the final out (ctrl-c to quit)
 curl mlbsched.run/watch/CLE
-curl mlbsched.run/watch/CLE?once=1   # one snapshot, no stream
+curl "mlbsched.run/watch/CLE?once=1"   # one snapshot, no stream
 curl mlbsched.run/watch              # today's games and the command for each
 
 # Replay a finished game pitch by pitch through the same screen
