@@ -1209,6 +1209,14 @@ async def replay_team_date(request: Request, team: str, date_str: str, game: int
                          speed, start)
 
 
+@app.get("/watch/{team}/{date_str}")
+async def watch_team_date(request: Request, team: str, date_str: str, game: int = 1,
+                          speed: float = 1.0, start: int = 0):
+    # People guess /watch/<TEAM>/<DATE> for a past game, so play it as /replay/<TEAM>/<DATE> does.
+    # No redirect: curl doesn't follow one by default.
+    return await replay_team_date(request, team, date_str, game=game, speed=speed, start=start)
+
+
 @app.get("/distance")
 def distance(request: Request):
     ip = get_client_ip(request)
