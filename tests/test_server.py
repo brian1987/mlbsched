@@ -90,7 +90,8 @@ def test_metrics_daily_counts_skip_bot_scanners(client, monkeypatch):
     # logging (which only writes today) never touches, so the counts are exact.
     day = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
     rows = [("/NYM", "curl", "a"), ("/NYM", "browser", "b"),
-            ("/wp-login.php", "browser", "c"), ("/.env", "curl", "d"), ("/.git/config", "curl", "e")]
+            ("/wp-login.php", "browser", "c"), ("/.env", "curl", "d"), ("/.git/config", "curl", "e"),
+            ("/admin/elmah.axd", "browser", "f"), ("/.npmrc", "curl", "g")]
     conn = db._conn()
     conn.executemany(
         "INSERT INTO requests (ts, date, path, client, ip_hash) VALUES (?, ?, ?, ?, ?)",

@@ -156,6 +156,7 @@ _LINK_EXAMPLES = {
     "/h2h/<TEAM>/<TEAM>": "/h2h/NYM/PHI",   # the same team twice is a 400
     "/box/<TEAM>/<DATE>": None,             # today rarely has a final, and any fixed
     "/wp/<TEAM>/<DATE>":  None,             # date is wrong on most pages that say this
+    "/winprob/<TEAM>/<DATE>": None,
 }
 _LINK_FILLS = {"TEAM": "NYM", "NAME": "lindor", "STAT": "ops", "YEAR": "2015"}  # DATE → today
 
@@ -932,13 +933,15 @@ def api_broadcasts_team(request: Request, team: str):
     return JSONResponse(data)
 
 
+@app.get("/api/winprob/{team}")
 @app.get("/api/wp/{team}")
 def api_wp(team: str):
-    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+    d = _winprob_date(team.upper())
     data = wp.build_wp_json(team, d)
     return JSONResponse(data, status_code=404 if "error" in data else 200)
 
 
+@app.get("/api/winprob/{team}/{date_str}")
 @app.get("/api/wp/{team}/{date_str}")
 def api_wp_date(team: str, date_str: str):
     try:
@@ -1139,6 +1142,8 @@ async def watch_team(request: Request, team: str, once: bool = False):
         frame = watch.render_frame(snap, tz=tz, mode="browser")
         if hint:
             frame += "\n" + hint
+        elif watch.finished(snap):
+            frame += "\n" + watch.render_winprob_hint(game, abv)
         return respond(request, frame, refresh_secs=None if watch.is_over(snap) else 10)
     if once or not watch.worth_streaming(snap) or watch.active_streams() >= watch.MAX_STREAMS:
         frame = watch.render_frame(snap, tz=tz, mode="once")
@@ -1149,9 +1154,11 @@ async def watch_team(request: Request, team: str, once: bool = False):
                 frame += (f"  {sched.GRAY}The live screen opens 3 hours before first pitch — "
                           f"come back then: curl mlbsched.run/watch/{abv}{sched.RESET}\n\n")
                 frame += f"{hint}\n" if hint else ""
+        elif not once and watch.finished(snap):
+            frame += "\n" + watch.render_winprob_hint(game, abv) + "\n"
         return PlainTextResponse(frame)
     return StreamingResponse(
-        watch.stream(game, tz, request.is_disconnected),
+        watch.stream(game, tz, request.is_disconnected, abv),
         media_type="text/plain; charset=utf-8",
         headers=_STREAM_HEADERS,
     )
@@ -1258,6 +1265,8 @@ _BOT_PATH_PATTERNS = (
     "%/.aws%",
     "%/.vscode%",
     "%/.idea%",
+    "%/.npmrc%",      # npm registry token scans
+    "%elmah%",        # ASP.NET error-log probes (/elmah.axd, /admin/elmah.axd, …)
     "%_profiler%",    # Symfony profiler probes
     "%phpinfo%",
     "%.json",         # credentials/secrets/service-account scans (app serves none)
@@ -1592,21 +1601,46 @@ def ical_feed(filename: str):
     )
 
 
+def _winprob_date(abv: str) -> str:
+    """The date of the team's last finished game, or yesterday if MLB has none to give."""
+    game = watch.last_final(sched.TEAMS[abv][0]) if abv in sched.TEAMS else None
+    return (game or {}).get("officialDate") or (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+async def _winprob(request: Request, abv: str, d: str, play: bool, game: int):
+    """The chart page, or with ?play=1 in a terminal, the chart drawn play by play."""
+    tz = await asyncio.to_thread(_viewer_tz, request)
+    if play and is_curl(request) and abv in sched.TEAMS and watch.active_streams() < watch.MAX_STREAMS:
+        found = await asyncio.to_thread(watch.find_team_game, abv, d, game)
+        if found and found["status"]["abstractGameState"] == "Final":
+            plays = await asyncio.to_thread(wp.fetch_wp, found["gamePk"])
+            if plays:
+                return StreamingResponse(
+                    wp.play(found, plays, tz, request.is_disconnected),
+                    media_type="text/plain; charset=utf-8",
+                    headers=_STREAM_HEADERS,
+                )
+    text = await asyncio.to_thread(wp.render_winprob, abv, d, tz)
+    return respond(request, text, status_code=team_status(abv))
+
+
+# /wp is the original name, kept so old links still work.
+@app.get("/winprob/{team}")
 @app.get("/wp/{team}")
-def wp_route(request: Request, team: str):
-    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
-    d = (today_et() - timedelta(days=1)).strftime("%Y-%m-%d")
-    return respond(request, wp.render_wp(team, d, tz=tz), status_code=team_status(team))
+async def winprob_route(request: Request, team: str, play: bool = False, game: int = 1):
+    abv = team.upper()
+    d = await asyncio.to_thread(_winprob_date, abv)
+    return await _winprob(request, abv, d, play, game)
 
 
+@app.get("/winprob/{team}/{date_str}")
 @app.get("/wp/{team}/{date_str}")
-def wp_route_date(request: Request, team: str, date_str: str):
-    tz = get_user_tz(geolocate_ip(get_client_ip(request)))
+async def winprob_route_date(request: Request, team: str, date_str: str, play: bool = False, game: int = 1):
     try:
         d = sched.parse_date(date_str)
     except ValueError:
         return respond(request, f"\n  {sched.RED}Invalid date: {date_str}{sched.RESET}\n", status_code=404)
-    return respond(request, wp.render_wp(team, d.strftime("%Y-%m-%d"), tz=tz), status_code=team_status(team))
+    return await _winprob(request, team.upper(), d.strftime("%Y-%m-%d"), play, game)
 
 
 @app.get("/{segment}")

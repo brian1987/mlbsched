@@ -37,7 +37,7 @@ curl mlbsched.run/live
 # Watch a game live — line score, runners, count, pitcher, last pitch and play,
 # redrawn in place every few seconds until the final out (ctrl-c to quit)
 curl mlbsched.run/watch/CLE
-curl mlbsched.run/watch/CLE?once=1   # one snapshot, no stream
+curl "mlbsched.run/watch/CLE?once=1"   # one snapshot, no stream
 curl mlbsched.run/watch              # today's games and the command for each
 
 # Replay a finished game pitch by pitch through the same screen
@@ -115,9 +115,11 @@ curl mlbsched.run/birthdays
 # All-time legends born on today's date (ranked by seasons played)
 curl mlbsched.run/birthdays/all
 
-# Win-probability sparkline for a team's completed game(s) on a date (defaults to yesterday)
-curl mlbsched.run/wp/NYM
-curl mlbsched.run/wp/NYM/2025-10-04
+# Win-odds chart: how the odds swung in a team's last game, or a game on a date,
+# with the three biggest swings marked (/wp/... still works as an alias)
+curl mlbsched.run/winprob/NYM
+curl mlbsched.run/winprob/NYM/2026-04-10
+curl -N "mlbsched.run/winprob/NYM/2026-04-10?play=1"   # draw it play by play (~20s); ?game=2 for a nightcap
 
 # All team abbreviations
 curl mlbsched.run/teams
@@ -203,8 +205,8 @@ curl mlbsched.run/api/today
 curl mlbsched.run/api/onthisday
 curl mlbsched.run/api/birthdays
 curl mlbsched.run/api/birthdays/all
-curl mlbsched.run/api/wp/NYM
-curl mlbsched.run/api/wp/NYM/2025-10-04
+curl mlbsched.run/api/winprob/NYM
+curl mlbsched.run/api/winprob/NYM/2026-04-10
 ```
 
 ### Status codes
