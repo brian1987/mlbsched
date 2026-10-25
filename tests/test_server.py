@@ -104,6 +104,67 @@ def test_metrics_daily_counts_skip_bot_scanners(client, monkeypatch):
     assert line.split()[1:] == ["2", "2", "1", "1"]     # requests, unique, curl, browser: bots excluded
 
 
+def test_referrer_site_keeps_only_the_domain():
+    import db
+    assert db.referrer_site("https://www.reddit.com/r/baseball/comments/abc/") == "reddit.com"
+    assert db.referrer_site("https://news.ycombinator.com/item?id=1") == "news.ycombinator.com"
+    assert db.referrer_site("https://mlbsched.run/watch") is None       # clicks within the site
+    assert db.referrer_site("") is None and db.referrer_site("not a url") is None
+    assert db.referrer_site("http://[::1") is None                       # malformed, no raise
+
+
+def test_init_db_adds_referrer_to_an_older_database(tmp_path, monkeypatch):
+    import sqlite3
+    import db
+    old = tmp_path / "metrics.db"
+    conn = sqlite3.connect(old)
+    conn.execute("CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, "
+                 "date TEXT NOT NULL, path TEXT NOT NULL, client TEXT NOT NULL, ip_hash TEXT NOT NULL)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", old)
+    monkeypatch.setattr(db, "_local", type(db._local)())
+    db.init_db()
+    db.init_db()                                                         # second start is a no-op
+    db.log_request("/NYM", "1.2.3.4", "Mozilla/5.0", "https://www.reddit.com/r/baseball/")
+    assert db.query("SELECT path, referrer FROM requests")[0]["referrer"] == "reddit.com"
+
+
+def test_metrics_lists_where_visitors_came_from(client, monkeypatch):
+    import db
+    from datetime import datetime, timedelta, timezone
+    day = (datetime.now(timezone.utc) - timedelta(days=4)).strftime("%Y-%m-%d")
+    rows = [("/watch/MIL", "h", "reddit.com"), ("/", "h", "reddit.com"), ("/", "i", "reddit.com"),
+            ("/", "j", "news.ycombinator.com"), ("/<script>", "k", "<b>evil.example</b>")]
+    conn = db._conn()
+    conn.executemany(
+        "INSERT INTO requests (ts, date, path, client, ip_hash, referrer) VALUES (?, ?, ?, 'browser', ?, ?)",
+        [(f"{day}T12:00:00", day, path, ip, ref) for path, ip, ref in rows],
+    )
+    conn.commit()
+    monkeypatch.setenv("MLBSCHED_METRICS_TOKEN", "s3cret")
+    auth = {"Authorization": "Bearer s3cret"}
+    text = client.get("/metrics", headers={**auth, **CURL}).text
+    sources = text.split("Where visitors came from")[1].split("Top paths")[0]
+    assert re.search(r"reddit\.com\s+2\s+3", sources)                 # 2 visitors, 3 requests
+    assert sources.index("reddit.com") < sources.index("news.ycombinator.com")
+    page = client.get("/metrics", headers={**auth, **BROWSER}).text
+    assert "<td>reddit.com</td>" in page
+    assert "<script>" not in page and "&lt;script&gt;" in page          # logged paths are escaped
+    assert "&lt;b&gt;evil.example" in page
+
+
+def test_requests_log_their_referrer(client):
+    import db
+    import time
+    client.get("/teams", headers={**CURL, "Referer": "https://www.linkedin.com/feed/"})
+    for _ in range(50):                                                   # logging runs off the loop
+        if db.query("SELECT 1 FROM requests WHERE referrer = 'linkedin.com'"):
+            break
+        time.sleep(0.02)
+    assert db.query("SELECT path FROM requests WHERE referrer = 'linkedin.com'")[0]["path"] == "/teams"
+
+
 def test_help_about_random_offline(client):
     for path in ("/help", "/about", "/random", "/ical"):
         assert client.get(path, headers=CURL).status_code == 200, path
