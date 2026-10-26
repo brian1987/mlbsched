@@ -985,7 +985,11 @@ def api_watch(team: str):
     game = watch.find_game(abv)
     if game is None:
         return {"team": abv, "game": None}
-    return {"team": abv, "game": watch.snapshot(watch.fetch_feed(game["gamePk"]), game)}
+    snap = watch.snapshot(watch.fetch_feed(game["gamePk"]), game)
+    win_odds = watch.game_odds(game["gamePk"], snap["plays_done"]) if snap["status"] == "Live" else []
+    snap["win_probability"] = ({"home": win_odds[-1], "away": round(100 - win_odds[-1], 1)}
+                               if win_odds else None)
+    return {"team": abv, "game": snap}
 
 
 @app.get("/api/{team}")
@@ -1136,18 +1140,19 @@ async def watch_team(request: Request, team: str, once: bool = False):
         )
         return respond(request, msg)
     snap = watch.snapshot(await watch.fetch_feed_async(game["gamePk"]), game)
+    win_odds = await watch.live_odds(snap)
     # Hours before first pitch, offer the team's last game as a replay meanwhile.
     far_off = snap["status"] == "Preview" and not watch.is_over(snap) and not watch.worth_streaming(snap)
     hint = await asyncio.to_thread(watch.render_replay_hint, abv, tz) if far_off and not once else ""
     if not is_curl(request):
-        frame = watch.render_frame(snap, tz=tz, mode="browser")
+        frame = watch.render_frame(snap, tz=tz, mode="browser", odds=win_odds)
         if hint:
             frame += "\n" + hint
         elif watch.finished(snap):
             frame += "\n" + watch.render_winprob_hint(game, abv)
         return respond(request, frame, refresh_secs=None if watch.is_over(snap) else 10)
     if once or not watch.worth_streaming(snap) or watch.active_streams() >= watch.MAX_STREAMS:
-        frame = watch.render_frame(snap, tz=tz, mode="once")
+        frame = watch.render_frame(snap, tz=tz, mode="once", odds=win_odds)
         if not once and not watch.is_over(snap):
             if watch.active_streams() >= watch.MAX_STREAMS:
                 frame += f"  {sched.GRAY}Lots of people watching right now — this is a snapshot. Try again in a minute.{sched.RESET}\n"
